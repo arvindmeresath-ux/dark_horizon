@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "950110208775",
+    "project_id": "dark-horizon-95d68",
+    "storage_bucket": "dark-horizon-95d68.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:950110208775:android:3d862906988964ffe0fba2",
+        "android_client_info": {
+          "package_name": "com.shadow.dark_horizon"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyAsaVEQgjRKOZCA0s5K-EPr-B8INkEvbrQ"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

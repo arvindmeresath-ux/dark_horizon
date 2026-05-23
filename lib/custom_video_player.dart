@@ -51,7 +51,6 @@ class _MXStylePlayerState extends State<MXStylePlayer> {
   void _initializeController() async {
     String videoUrl = widget.url;
 
-    // YouTube Stream Extraction Logic
     if (videoUrl.contains("youtube.com") || videoUrl.contains("youtu.be")) {
       try {
         var yt = YoutubeExplode();
@@ -83,10 +82,9 @@ class _MXStylePlayerState extends State<MXStylePlayer> {
         _startControlsTimer();
       }
     }).catchError((error) {
-      debugPrint("Video Init Error: $error");
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text("Error loading video. Please check your connection.")),
+          const SnackBar(content: Text("Error loading video. Check connection.")),
         );
       }
     });
@@ -122,17 +120,6 @@ class _MXStylePlayerState extends State<MXStylePlayer> {
     });
   }
 
-  void _showOverlay(String text, IconData icon) {
-    setState(() {
-      _overlayText = text;
-      _overlayIcon = icon;
-    });
-    _overlayTimer?.cancel();
-    _overlayTimer = Timer(const Duration(milliseconds: 500), () {
-      if (mounted) setState(() => _overlayIcon = null);
-    });
-  }
-
   void _onVerticalDrag(DragUpdateDetails details, bool isLeft) async {
     double delta = -details.primaryDelta! / 200;
     if (isLeft) {
@@ -146,18 +133,18 @@ class _MXStylePlayerState extends State<MXStylePlayer> {
     }
   }
 
+  void _showOverlay(String text, IconData icon) {
+    setState(() { _overlayText = text; _overlayIcon = icon; });
+    _overlayTimer?.cancel();
+    _overlayTimer = Timer(const Duration(milliseconds: 600), () {
+      if (mounted) setState(() => _overlayIcon = null);
+    });
+  }
+
   void _skip(int seconds) {
     final newPos = _controller.value.position + Duration(seconds: seconds);
     _controller.seekTo(newPos);
     _showOverlay("${seconds > 0 ? '+' : ''}$seconds s", seconds > 0 ? Icons.fast_forward : Icons.fast_rewind);
-  }
-
-  void _toggleFit() {
-    setState(() {
-      if (_videoFit == BoxFit.contain) _videoFit = BoxFit.cover;
-      else if (_videoFit == BoxFit.cover) _videoFit = BoxFit.fill;
-      else _videoFit = BoxFit.contain;
-    });
   }
 
   void _toggleOrientation() {
@@ -181,7 +168,6 @@ class _MXStylePlayerState extends State<MXStylePlayer> {
         child: LayoutBuilder(
           builder: (context, constraints) {
             final double videoHeight = _isFullScreen ? constraints.maxHeight : constraints.maxWidth * 9 / 16;
-            
             return Column(
               children: [
                 SizedBox(
@@ -189,80 +175,39 @@ class _MXStylePlayerState extends State<MXStylePlayer> {
                   height: videoHeight,
                   child: Stack(
                     children: [
-                      // Video Content
                       if (_isInitialized)
-                        Center(
-                          child: FittedBox(
-                            fit: _videoFit,
-                            child: SizedBox(
-                              width: _controller.value.size.width,
-                              height: _controller.value.size.height,
-                              child: VideoPlayer(_controller),
-                            ),
-                          ),
-                        )
+                        Center(child: FittedBox(fit: _videoFit, child: SizedBox(width: _controller.value.size.width, height: _controller.value.size.height, child: VideoPlayer(_controller))))
                       else
                         const Center(child: CircularProgressIndicator(color: Colors.amber)),
 
-                      // Gesture Layers
+                      // GESTURE LAYER (Split for Double Tap)
                       Row(
                         children: [
                           Expanded(child: GestureDetector(
-                            onVerticalDragUpdate: (d) => _onVerticalDrag(d, true),
-                            onDoubleTap: () => _skip(-10),
                             onTap: _toggleControls,
+                            onDoubleTap: () => _skip(-10),
+                            onVerticalDragUpdate: (d) => _onVerticalDrag(d, true),
                           )),
                           Expanded(child: GestureDetector(
-                            onVerticalDragUpdate: (d) => _onVerticalDrag(d, false),
-                            onDoubleTap: () => _skip(10),
                             onTap: _toggleControls,
+                            onDoubleTap: () => _skip(10),
+                            onVerticalDragUpdate: (d) => _onVerticalDrag(d, false),
                           )),
                         ],
                       ),
 
-                      // Overlay Indicators (Volume/Brightness)
                       if (_overlayIcon != null)
-                        Center(
-                          child: Container(
-                            padding: const EdgeInsets.all(16),
-                            decoration: BoxDecoration(color: Colors.black54, borderRadius: BorderRadius.circular(12)),
-                            child: Column(
-                              mainAxisSize: MainAxisSize.min,
-                              children: [
-                                Icon(_overlayIcon, color: Colors.amber, size: 40),
-                                const SizedBox(height: 8),
-                                Text(_overlayText, style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
-                              ],
-                            ),
-                          ),
-                        ),
+                        Center(child: Container(padding: const EdgeInsets.all(16), decoration: BoxDecoration(color: Colors.black54, borderRadius: BorderRadius.circular(12)), child: Column(mainAxisSize: MainAxisSize.min, children: [Icon(_overlayIcon, color: Colors.cyanAccent, size: 40), const SizedBox(height: 8), Text(_overlayText, style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold))]))),
 
-                      // UI CONTROLS
                       if (_isInitialized && _showControls) ...[
-                        // Header
                         _buildHeader(),
-                        
-                        // Center Play/Pause (PREMIUM LOOK)
-                        Center(child: _buildPremiumPlayButton()),
-
-                        // Bottom Controls Layer
-                        Positioned(
-                          bottom: 0, left: 0, right: 0,
-                          child: Column(
-                            mainAxisSize: MainAxisSize.min,
-                            children: [
-                              _buildUtilityRow(),
-                              _buildPremiumSeekBar(),
-                            ],
-                          ),
-                        ),
+                        Center(child: _buildPlayButton()),
+                        Positioned(bottom: 0, left: 0, right: 0, child: Column(mainAxisSize: MainAxisSize.min, children: [_buildUtilityRow(), _buildSeekBar()])),
                       ],
                     ],
                   ),
                 ),
-                
-                // Content Details below player (Portrait only)
-                if (!_isFullScreen) _buildDetailsSection(),
+                if (!_isFullScreen) _buildDetails(),
               ],
             );
           },
@@ -271,106 +216,81 @@ class _MXStylePlayerState extends State<MXStylePlayer> {
     );
   }
 
-  Widget _buildPremiumPlayButton() {
+  Widget _buildPlayButton() {
     return GestureDetector(
-      onTap: () {
-        setState(() => _controller.value.isPlaying ? _controller.pause() : _controller.play());
-        _startControlsTimer();
-      },
+      onTap: () => setState(() => _controller.value.isPlaying ? _controller.pause() : _controller.play()),
       child: Container(
-        height: 70, width: 70,
-        decoration: BoxDecoration(
-          color: Colors.cyanAccent.withValues(alpha: 0.1),
-          shape: BoxShape.circle,
-          border: Border.all(color: Colors.cyanAccent.withValues(alpha: 0.3), width: 1.5),
-          boxShadow: [
-            BoxShadow(color: Colors.cyanAccent.withValues(alpha: 0.1), blurRadius: 15, spreadRadius: 1)
-          ],
-        ),
-        child: Icon(
-          _controller.value.isPlaying ? Icons.pause_rounded : Icons.play_arrow_rounded,
-          color: Colors.cyanAccent, size: 45,
-        ),
+        padding: const EdgeInsets.all(12),
+        decoration: BoxDecoration(color: Colors.cyanAccent.withValues(alpha: 0.1), shape: BoxShape.circle, border: Border.all(color: Colors.cyanAccent.withValues(alpha: 0.4))),
+        child: Icon(_controller.value.isPlaying ? Icons.pause_rounded : Icons.play_arrow_rounded, color: Colors.cyanAccent, size: 45),
       ),
     );
   }
 
   Widget _buildHeader() {
     return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+      padding: const EdgeInsets.all(16),
       decoration: const BoxDecoration(gradient: LinearGradient(begin: Alignment.topCenter, end: Alignment.bottomCenter, colors: [Colors.black87, Colors.transparent])),
-      child: Row(
-        children: [
-          IconButton(icon: const Icon(Icons.arrow_back, color: Colors.yellowAccent), onPressed: () => Navigator.pop(context)),
-          Expanded(child: Text(widget.title, style: const TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.bold), overflow: TextOverflow.ellipsis)),
-        ],
-      ),
+      child: Row(children: [IconButton(icon: const Icon(Icons.arrow_back, color: Colors.cyanAccent), onPressed: () => Navigator.pop(context)), Expanded(child: Text(widget.title, style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold), overflow: TextOverflow.ellipsis))]),
     );
   }
 
   Widget _buildUtilityRow() {
     return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
       child: Row(
         mainAxisAlignment: MainAxisAlignment.spaceBetween,
         children: [
-          // Left Side: Fit & Speed
-          Row(
-            children: [
-              _iconButton(Icons.aspect_ratio_rounded, _toggleFit, "Fit", Colors.yellowAccent),
-              const SizedBox(width: 25),
-              _iconButton(Icons.speed_rounded, _showSpeedMenu, "${_playbackSpeed}x", Colors.cyanAccent),
-            ],
-          ),
-          // Right Side: Orientation
-          _iconButton(_isFullScreen ? Icons.fullscreen_exit : Icons.fullscreen, _toggleOrientation, "", Colors.yellowAccent),
+          Row(children: [
+            _iconBtn(Icons.aspect_ratio, () => setState(() => _videoFit = _videoFit == BoxFit.contain ? BoxFit.cover : BoxFit.contain), "Fit", Colors.cyanAccent),
+            const SizedBox(width: 20),
+            _iconBtn(Icons.speed, _showSpeedMenu, "${_playbackSpeed}x", Colors.cyanAccent),
+          ]),
+          _iconBtn(_isFullScreen ? Icons.fullscreen_exit : Icons.fullscreen, _toggleOrientation, "", Colors.cyanAccent),
         ],
       ),
     );
   }
 
-  Widget _iconButton(IconData icon, VoidCallback onTap, String label, Color color) {
-    return GestureDetector(
-      onTap: onTap,
+  Widget _iconBtn(IconData icon, VoidCallback onTap, String label, Color color) {
+    return GestureDetector(onTap: onTap, child: Column(mainAxisSize: MainAxisSize.min, children: [Icon(icon, color: color, size: 22), if (label.isNotEmpty) Text(label, style: TextStyle(color: color, fontSize: 10, fontWeight: FontWeight.bold))]));
+  }
+
+  Widget _buildSeekBar() {
+    return Container(
+      padding: EdgeInsets.zero, // Minimal thickness
       child: Column(
         mainAxisSize: MainAxisSize.min,
-        children: [
-          Icon(icon, color: color, size: 22),
-          if (label.isNotEmpty) Text(label, style: TextStyle(color: color, fontSize: 10, fontWeight: FontWeight.bold)),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildPremiumSeekBar() {
-    return Container(
-      color: Colors.black45,
-      padding: const EdgeInsets.only(bottom: 2), 
-      child: Column(
         children: [
           Padding(
             padding: const EdgeInsets.symmetric(horizontal: 16),
             child: Row(
               mainAxisAlignment: MainAxisAlignment.spaceBetween,
               children: [
-                Text(_formatDuration(_controller.value.position), style: const TextStyle(color: Colors.cyanAccent, fontSize: 11, fontWeight: FontWeight.bold)),
-                Text(_formatDuration(_controller.value.duration), style: const TextStyle(color: Colors.yellowAccent, fontSize: 11, fontWeight: FontWeight.bold)),
+                Text(_formatDuration(_controller.value.position), style: const TextStyle(color: Colors.pinkAccent, fontSize: 10, fontWeight: FontWeight.bold)),
+                Text(_formatDuration(_controller.value.duration), style: const TextStyle(color: Colors.yellowAccent, fontSize: 10, fontWeight: FontWeight.bold)),
               ],
             ),
           ),
           SliderTheme(
             data: SliderTheme.of(context).copyWith(
-              trackHeight: 2.5,
-              thumbShape: const RoundSliderThumbShape(enabledThumbRadius: 6),
-              overlayShape: const RoundSliderOverlayShape(overlayRadius: 12),
-              thumbColor: Colors.cyanAccent,
+              trackHeight: 1.5, // Thinner line
+              thumbShape: const RoundSliderThumbShape(enabledThumbRadius: 5), // Smaller thumb
+              overlayShape: const RoundSliderOverlayShape(overlayRadius: 10),
+              thumbColor: Colors.pinkAccent,
               activeTrackColor: Colors.yellowAccent,
               inactiveTrackColor: Colors.white12,
+              // Tighten the slider layout
+              valueIndicatorShape: const PaddleSliderValueIndicatorShape(),
+              trackShape: const RectangularSliderTrackShape(),
             ),
-            child: Slider(
-              value: _controller.value.position.inSeconds.toDouble(),
-              max: _controller.value.duration.inSeconds.toDouble(),
-              onChanged: (v) => _controller.seekTo(Duration(seconds: v.toInt())),
+            child: Container(
+              height: 20, // Strict height limit
+              child: Slider(
+                value: _controller.value.position.inSeconds.toDouble(),
+                max: _controller.value.duration.inSeconds.toDouble() > 0 ? _controller.value.duration.inSeconds.toDouble() : 1.0,
+                onChanged: (v) => _controller.seekTo(Duration(seconds: v.toInt())),
+              ),
             ),
           ),
         ],
@@ -378,47 +298,12 @@ class _MXStylePlayerState extends State<MXStylePlayer> {
     );
   }
 
-  Widget _buildDetailsSection() {
-    return Expanded(
-      child: Container(
-        padding: const EdgeInsets.all(24),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text(widget.subjectCode, style: const TextStyle(color: Colors.yellowAccent, fontWeight: FontWeight.bold, fontSize: 14)),
-            const SizedBox(height: 8),
-            Text(widget.title, style: const TextStyle(color: Colors.white, fontSize: 22, fontWeight: FontWeight.w900)),
-            Text(widget.unitName, style: const TextStyle(color: Colors.cyanAccent, fontSize: 14)),
-          ],
-        ),
-      ),
-    );
+  Widget _buildDetails() {
+    return Expanded(child: Container(padding: const EdgeInsets.all(24), child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [Text(widget.subjectCode, style: const TextStyle(color: Colors.cyanAccent, fontWeight: FontWeight.bold)), const SizedBox(height: 8), Text(widget.title, style: const TextStyle(color: Colors.white, fontSize: 22, fontWeight: FontWeight.w900)), Text(widget.unitName, style: const TextStyle(color: Colors.white38))])));
   }
 
   void _showSpeedMenu() {
-    showModalBottomSheet(
-      context: context,
-      backgroundColor: Colors.grey[900],
-      shape: const RoundedRectangleBorder(borderRadius: BorderRadius.vertical(top: Radius.circular(20))),
-      builder: (c) => Container(
-        padding: const EdgeInsets.symmetric(vertical: 10),
-        constraints: BoxConstraints(maxHeight: MediaQuery.of(context).size.height * 0.5),
-        child: SingleChildScrollView(
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [0.5, 1.0, 1.5, 2.0, 2.5, 3.0].map((s) => ListTile(
-              dense: true,
-              title: Text("${s}x Speed", style: TextStyle(color: _playbackSpeed == s ? Colors.yellowAccent : Colors.white, fontWeight: _playbackSpeed == s ? FontWeight.bold : FontWeight.normal)),
-              trailing: _playbackSpeed == s ? const Icon(Icons.check, color: Colors.cyanAccent, size: 18) : null,
-              onTap: () {
-                setState(() { _playbackSpeed = s; _controller.setPlaybackSpeed(s); });
-                Navigator.pop(c);
-              },
-            )).toList(),
-          ),
-        ),
-      ),
-    );
+    showModalBottomSheet(context: context, backgroundColor: Colors.grey[900], builder: (c) => ListView(shrinkWrap: true, children: [0.5, 1.0, 1.5, 2.0, 2.5, 3.0].map((s) => ListTile(title: Text("${s}x Speed", style: TextStyle(color: _playbackSpeed == s ? Colors.cyanAccent : Colors.white)), onTap: () { setState(() { _playbackSpeed = s; _controller.setPlaybackSpeed(s); }); Navigator.pop(c); })).toList()));
   }
 
   String _formatDuration(Duration d) {

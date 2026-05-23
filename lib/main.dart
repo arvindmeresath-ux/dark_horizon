@@ -369,19 +369,54 @@ class ContentListScreen extends StatelessWidget {
             final data = docs[index].data() as Map<String, dynamic>;
             final String title = data['title'] ?? "No Title";
             final String url = data[type == "lectures" ? 'videoUrl' : 'fileUrl'] ?? "";
-            return Card(
-              color: Colors.grey[900], shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(15), side: const BorderSide(color: Colors.white10)),
-              child: ListTile(
-                leading: Icon(type == "lectures" ? Icons.play_circle : Icons.description, color: Colors.amber),
-                title: Text(title, style: const TextStyle(color: Colors.white)),
-                trailing: IconButton(icon: const Icon(Icons.download_for_offline, color: Colors.amber), onPressed: () => _startDownload(context, url, title, type == "notes")),
-                onTap: () { if (type == "lectures") Navigator.push(context, MaterialPageRoute(builder: (c) => MXStylePlayer(url: url, title: title, subjectCode: subject, unitName: unit))); },
-              ),
+
+            return FutureBuilder<String>(
+              future: _fetchSize(url),
+              builder: (context, sizeSnapshot) {
+                final String size = sizeSnapshot.data ?? "Loading...";
+                return Card(
+                  color: Colors.grey[900], shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(15), side: const BorderSide(color: Colors.white10)),
+                  child: ListTile(
+                    leading: Icon(type == "lectures" ? Icons.play_circle : Icons.description, color: Colors.amber),
+                    title: Text(title, style: const TextStyle(color: Colors.white)),
+                    subtitle: Text(size, style: const TextStyle(color: Colors.white38, fontSize: 11)),
+                    trailing: IconButton(icon: const Icon(Icons.download_for_offline, color: Colors.amber), onPressed: () => _startDownload(context, url, title, type == "notes")),
+                    onTap: () { if (type == "lectures") Navigator.push(context, MaterialPageRoute(builder: (c) => MXStylePlayer(url: url, title: title, subjectCode: subject, unitName: unit))); },
+                  ),
+                );
+              }
             );
           },
         );
       },
     );
+  }
+
+  Future<String> _fetchSize(String url) async {
+    if (url.isEmpty || url.contains("youtube.com") || url.contains("youtu.be")) return "Stream Only";
+    try {
+      // Robust fetching for Internet Archive & others using Range header
+      final response = await http.get(Uri.parse(url), headers: {"Range": "bytes=0-0"}).timeout(const Duration(seconds: 3));
+      
+      if (response.headers.containsKey('content-range')) {
+        String range = response.headers['content-range']!;
+        double totalBytes = double.parse(range.split('/').last);
+        return "${(totalBytes / (1024 * 1024)).toStringAsFixed(1)} MB";
+      } else if (response.headers.containsKey('content-length')) {
+        double mb = double.parse(response.headers['content-length']!) / (1024 * 1024);
+        return "${mb.toStringAsFixed(1)} MB";
+      }
+      return "Size Unknown";
+    } catch (_) {
+      try {
+        final headRes = await http.head(Uri.parse(url)).timeout(const Duration(seconds: 2));
+        if (headRes.headers.containsKey('content-length')) {
+          double mb = double.parse(headRes.headers['content-length']!) / (1024 * 1024);
+          return "${mb.toStringAsFixed(1)} MB";
+        }
+      } catch (__) {}
+      return "Size Unknown";
+    }
   }
 
   Future<void> _startDownload(BuildContext context, String url, String title, bool isNotes) async {
@@ -726,8 +761,8 @@ class _AdminPanelScreenState extends State<AdminPanelScreen> {
                                       title: Text(uDoc.id, style: const TextStyle(color: Colors.white54, fontSize: 11)),
                                       trailing: IconButton(icon: const Icon(Icons.delete_outline, size: 16, color: Colors.redAccent), onPressed: () async {
                                         // Delete Unit and its contents
-                                        final lecs = await uDoc.reference.collection('lectures').get();
-                                        for (var l in lecs.docs) { await l.reference.delete(); }
+                                        final lecturesSnap = await uDoc.reference.collection('lectures').get();
+                                        for (var l in lecturesSnap.docs) { await l.reference.delete(); }
                                         final notes = await uDoc.reference.collection('notes').get();
                                         for (var n in notes.docs) { await n.reference.delete(); }
                                         await uDoc.reference.delete();

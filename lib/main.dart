@@ -15,6 +15,7 @@ import 'package:path/path.dart' as p;
 import 'package:http/http.dart' as http;
 import 'custom_video_player.dart';
 import 'auth_service.dart';
+import 'connectivity_wrapper.dart';
 
 @pragma('vm:entry-point')
 void downloadCallback(String id, int status, int progress) {
@@ -48,7 +49,7 @@ class MyApp extends StatelessWidget {
         ),
         useMaterial3: true,
       ),
-      home: const AuthWrapper(),
+      home: const ConnectivityWrapper(child: AuthWrapper()),
     );
   }
 }
@@ -504,6 +505,7 @@ class _AdminPanelScreenState extends State<AdminPanelScreen> {
   String _suggestedUnit = "Unit 1";
   bool _isUploading = false;
   final List<TextEditingController> _lectureControllers = [TextEditingController()];
+  final Map<int, String?> _fieldErrors = {};
 
   @override
   void initState() {
@@ -548,6 +550,26 @@ class _AdminPanelScreenState extends State<AdminPanelScreen> {
   Future<void> _uploadUnit() async {
     final String subject = _subjectController.text.trim();
     if (subject.isEmpty) return;
+
+    // Strict URL Validation Loop
+    bool hasError = false;
+    final urlRegex = RegExp(r'^(http|https)://[^\s/$.?#].[^\s]*$');
+    
+    setState(() => _fieldErrors.clear());
+
+    for (int i = 0; i < _lectureControllers.length; i++) {
+      String link = _lectureControllers[i].text.trim();
+      if (link.isNotEmpty && !urlRegex.hasMatch(link)) {
+        setState(() => _fieldErrors[i] = "INVALID DATA LINK Structure");
+        hasError = true;
+      }
+    }
+
+    if (hasError) {
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("Fix highlighted errors before uploading"), backgroundColor: Colors.redAccent));
+      return;
+    }
+
     setState(() => _isUploading = true);
     try {
       final batch = FirebaseFirestore.instance.batch();
@@ -608,7 +630,31 @@ class _AdminPanelScreenState extends State<AdminPanelScreen> {
               TextField(controller: _subjectController, decoration: const InputDecoration(labelText: "Subject Name"), onChanged: (_) => _checkNextUnit()),
               const SizedBox(height: 10),
               Text("Target: $_suggestedUnit", style: const TextStyle(color: Colors.amber, fontSize: 12, fontWeight: FontWeight.bold)),
-              ListView.builder(shrinkWrap: true, physics: const NeverScrollableScrollPhysics(), itemCount: _lectureControllers.length, itemBuilder: (c, i) => TextField(controller: _lectureControllers[i], decoration: InputDecoration(labelText: "Lecture ${i+1} URL"))),
+              ListView.builder(
+                shrinkWrap: true,
+                physics: const NeverScrollableScrollPhysics(),
+                itemCount: _lectureControllers.length,
+                itemBuilder: (c, i) => Padding(
+                  padding: const EdgeInsets.only(bottom: 8.0),
+                  child: TextField(
+                    controller: _lectureControllers[i],
+                    style: const TextStyle(color: Colors.white, fontSize: 13),
+                    decoration: InputDecoration(
+                      labelText: "Lecture ${i + 1} URL",
+                      errorText: _fieldErrors[i],
+                      errorStyle: const TextStyle(color: Colors.pinkAccent),
+                      enabledBorder: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(12),
+                        borderSide: BorderSide(color: _fieldErrors[i] != null ? Colors.pinkAccent : Colors.white10),
+                      ),
+                      focusedBorder: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(12),
+                        borderSide: BorderSide(color: _fieldErrors[i] != null ? Colors.pinkAccent : Colors.amber),
+                      ),
+                    ),
+                  ),
+                ),
+              ),
               const SizedBox(height: 20),
               _isUploading ? const CircularProgressIndicator() : ElevatedButton(onPressed: _uploadUnit, style: ElevatedButton.styleFrom(backgroundColor: Colors.amber, foregroundColor: Colors.black), child: const Text("INITIALIZE BULK UPLOAD")),
             ]),
@@ -890,7 +936,7 @@ class DownloadsScreen extends StatefulWidget {
   State<DownloadsScreen> createState() => _DownloadsScreenState();
 }
 
-class _DownloadsScreenState extends State<DownloadsScreen> {
+class _DownloadsScreenState extends State<DownloadsScreen> with WidgetsBindingObserver {
   final ReceivePort _port = ReceivePort();
   List<FileSystemEntity> _files = [];
   List<DownloadTask> _tasks = [];
@@ -900,6 +946,7 @@ class _DownloadsScreenState extends State<DownloadsScreen> {
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     
     // Bind Downloader Isolate
     IsolateNameServer.registerPortWithName(_port.sendPort, 'downloader_send_port');
@@ -907,14 +954,35 @@ class _DownloadsScreenState extends State<DownloadsScreen> {
     FlutterDownloader.registerCallback(downloadCallback);
 
     _loadAll();
-    _refreshTimer = Timer.periodic(const Duration(seconds: 2), (timer) => _loadAll());
+    _refreshTimer = Timer.periodic(const Duration(seconds: 5), (timer) => _loadAll());
   }
 
   @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
     _refreshTimer?.cancel();
     IsolateNameServer.removePortNameMapping('downloader_send_port');
     super.dispose();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.paused || state == AppLifecycleState.inactive) {
+      // Automatically pause running downloads when app is closed/minimized to prevent cancellation
+      _pauseAllRunningTasks();
+    }
+  }
+
+  Future<void> _pauseAllRunningTasks() async {
+    final tasks = await FlutterDownloader.loadTasks();
+    if (tasks != null) {
+      for (var task in tasks) {
+        if (task.status == DownloadTaskStatus.running || task.status == DownloadTaskStatus.enqueued) {
+          await FlutterDownloader.pause(taskId: task.taskId);
+        }
+      }
+      _loadAll();
+    }
   }
 
   Future<void> _loadAll() async {
@@ -956,11 +1024,12 @@ class _DownloadsScreenState extends State<DownloadsScreen> {
 
   @override
   Widget build(BuildContext context) {
-    // Filter active tasks
+    // Filter active tasks (Running, Enqueued, Paused, or Failed for retry)
     final activeTasks = _tasks.where((t) => 
       t.status == DownloadTaskStatus.running || 
       t.status == DownloadTaskStatus.enqueued || 
-      t.status == DownloadTaskStatus.paused
+      t.status == DownloadTaskStatus.paused ||
+      t.status == DownloadTaskStatus.failed
     ).toList();
 
     // Grouping for completed files
@@ -1018,6 +1087,7 @@ class _DownloadsScreenState extends State<DownloadsScreen> {
 
     bool isRunning = task.status == DownloadTaskStatus.running;
     bool isPaused = task.status == DownloadTaskStatus.paused;
+    bool isFailed = task.status == DownloadTaskStatus.failed || task.status == DownloadTaskStatus.canceled;
 
     return Card(
       color: Colors.grey[900],
@@ -1052,6 +1122,16 @@ class _DownloadsScreenState extends State<DownloadsScreen> {
                         icon: const Icon(Icons.play_circle_fill, color: Colors.greenAccent, size: 24),
                         onPressed: () async {
                           await FlutterDownloader.resume(taskId: task.taskId);
+                          _loadAll();
+                        },
+                      ),
+                    if (isFailed)
+                      IconButton(
+                        constraints: const BoxConstraints(),
+                        padding: const EdgeInsets.all(4),
+                        icon: const Icon(Icons.refresh, color: Colors.orangeAccent, size: 24),
+                        onPressed: () async {
+                          await FlutterDownloader.retry(taskId: task.taskId);
                           _loadAll();
                         },
                       ),
@@ -1090,10 +1170,18 @@ class _DownloadsScreenState extends State<DownloadsScreen> {
     List<String> parts = name.split('⦙');
     String title = parts.last.replaceAll('_', ' ').replaceAll('.mp4', '').replaceAll('.pdf', '');
     bool isVideo = name.endsWith('.mp4');
+    
+    // Get file size
+    String fileSizeStr = "0 MB";
+    try {
+      int bytes = file.statSync().size;
+      fileSizeStr = "${(bytes / (1024 * 1024)).toStringAsFixed(1)} MB";
+    } catch (_) {}
 
     return ListTile(
       leading: Icon(isVideo ? Icons.play_circle : Icons.description, color: Colors.amber, size: 20),
       title: Text(title, style: const TextStyle(color: Colors.white60, fontSize: 13)),
+      subtitle: Text(fileSizeStr, style: const TextStyle(color: Colors.white24, fontSize: 10)),
       onTap: () => isVideo 
         ? Navigator.push(context, MaterialPageRoute(builder: (c) => MXStylePlayer(url: file.path, title: title, subjectCode: "Offline", unitName: "Downloads")))
         : OpenFilex.open(file.path),

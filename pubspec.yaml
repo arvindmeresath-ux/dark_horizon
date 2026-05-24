@@ -30,6 +30,7 @@ dependencies:
   get: ^4.6.6
   screen_brightness: ^1.0.1
   flutter_volume_controller: ^1.2.1
+  screen_protector: ^1.5.1
 
 dev_dependencies:
   flutter_test:

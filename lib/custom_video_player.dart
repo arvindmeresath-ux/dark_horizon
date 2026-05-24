@@ -6,6 +6,7 @@ import 'package:video_player/video_player.dart';
 import 'package:screen_brightness/screen_brightness.dart';
 import 'package:flutter_volume_controller/flutter_volume_controller.dart';
 import 'package:youtube_explode_dart/youtube_explode_dart.dart';
+import 'package:screen_protector/screen_protector.dart';
 
 class MXStylePlayer extends StatefulWidget {
   final String url;
@@ -49,6 +50,7 @@ class _MXStylePlayerState extends State<MXStylePlayer> with WidgetsBindingObserv
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
+    ScreenProtector.preventScreenshotOn();
     _initializeController();
     SystemChrome.setPreferredOrientations([DeviceOrientation.portraitUp, DeviceOrientation.landscapeLeft, DeviceOrientation.landscapeRight]);
   }
@@ -57,7 +59,9 @@ class _MXStylePlayerState extends State<MXStylePlayer> with WidgetsBindingObserv
   void didChangeAppLifecycleState(AppLifecycleState state) {
     super.didChangeAppLifecycleState(state);
     if (state == AppLifecycleState.paused || state == AppLifecycleState.inactive) {
-      if (_controller.value.isPlaying) _controller.pause();
+      if (_isInitialized && _controller.value.isPlaying) {
+        _controller.pause();
+      }
     }
   }
 
@@ -100,12 +104,17 @@ class _MXStylePlayerState extends State<MXStylePlayer> with WidgetsBindingObserv
       }
     });
 
-    _controller.addListener(() { if (mounted) setState(() {}); });
+    _controller.addListener(() {
+      if (mounted) {
+        setState(() {});
+      }
+    });
   }
 
   @override
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
+    ScreenProtector.preventScreenshotOff();
     _controlsTimer?.cancel();
     _overlayTimer?.cancel();
     _controller.dispose();
@@ -117,14 +126,18 @@ class _MXStylePlayerState extends State<MXStylePlayer> with WidgetsBindingObserv
   void _startControlsTimer() {
     _controlsTimer?.cancel();
     _controlsTimer = Timer(const Duration(seconds: 4), () {
-      if (mounted && _controller.value.isPlaying) setState(() => _showControls = false);
+      if (mounted && _controller.value.isPlaying) {
+        setState(() => _showControls = false);
+      }
     });
   }
 
   void _toggleControls() {
     setState(() {
       _showControls = !_showControls;
-      if (_showControls) _startControlsTimer();
+      if (_showControls) {
+        _startControlsTimer();
+      }
     });
   }
 
@@ -145,7 +158,9 @@ class _MXStylePlayerState extends State<MXStylePlayer> with WidgetsBindingObserv
     setState(() { _overlayText = text; _overlayIcon = icon; });
     _overlayTimer?.cancel();
     _overlayTimer = Timer(const Duration(milliseconds: 600), () {
-      if (mounted) setState(() => _overlayIcon = null);
+      if (mounted) {
+        setState(() => _overlayIcon = null);
+      }
     });
   }
 
@@ -155,11 +170,17 @@ class _MXStylePlayerState extends State<MXStylePlayer> with WidgetsBindingObserv
     
     // Animation Feedback
     setState(() {
-      if (seconds > 0) _showForwardIcon = true; else _showBackwardIcon = true;
+      if (seconds > 0) {
+        _showForwardIcon = true;
+      } else {
+        _showBackwardIcon = true;
+      }
     });
     
     Timer(const Duration(milliseconds: 500), () {
-      if (mounted) setState(() { _showForwardIcon = false; _showBackwardIcon = false; });
+      if (mounted) {
+        setState(() { _showForwardIcon = false; _showBackwardIcon = false; });
+      }
     });
   }
 

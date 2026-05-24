@@ -1,3 +1,4 @@
+import 'dart:convert';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:device_info_plus/device_info_plus.dart';
@@ -8,15 +9,36 @@ class AuthService {
   final FirebaseFirestore _firestore = FirebaseFirestore.instance;
   final DeviceInfoPlugin _deviceInfo = DeviceInfoPlugin();
 
+  // --- 1. LINK PROTECTION (OBFUSCATION) ---
+  static String encryptLink(String url) => base64.encode(utf8.encode(url));
+  static String decryptLink(String encoded) {
+    try {
+      return utf8.decode(base64.decode(encoded));
+    } catch (e) {
+      return encoded; // Return as is if it's not base64 (legacy data)
+    }
+  }
+
+  // --- 2. ADMIN ROLE CHECK ---
+  Future<bool> isAdmin() async {
+    User? user = _auth.currentUser;
+    if (user == null) return false;
+    DocumentSnapshot doc = await _firestore.collection('users').doc(user.uid).get();
+    if (doc.exists) {
+      return (doc.data() as Map<String, dynamic>)['role'] == 'admin';
+    }
+    return false;
+  }
+
   // Get Unique Device ID
   Future<String?> _getDeviceId() async {
     try {
       if (Platform.isAndroid) {
         AndroidDeviceInfo androidInfo = await _deviceInfo.androidInfo;
-        return androidInfo.id; // Unique ID for Android
+        return androidInfo.id;
       } else if (Platform.isIOS) {
         IosDeviceInfo iosInfo = await _deviceInfo.iosInfo;
-        return iosInfo.identifierForVendor; // Unique ID for iOS
+        return iosInfo.identifierForVendor;
       }
     } catch (e) {
       return null;
@@ -24,26 +46,16 @@ class AuthService {
     return null;
   }
 
-  // Sign In with Device Lock Logic
-  Future<String?> signIn({
-    required String email,
-    required String password,
-    bool force = false,
-  }) async {
+  // --- 3. SECURE SIGN IN WITH DEVICE LOCK ---
+  Future<String?> signIn({required String email, required String password}) async {
     try {
-      // 1. Get current device ID
       String? currentDeviceId = await _getDeviceId();
       if (currentDeviceId == null) return "Could not identify device.";
 
-      // 2. Perform Standard Auth
-      UserCredential result = await _auth.signInWithEmailAndPassword(
-        email: email, 
-        password: password
-      );
+      UserCredential result = await _auth.signInWithEmailAndPassword(email: email, password: password);
       User? user = result.user;
 
       if (user != null) {
-        // 3. Check User Record in Firestore
         DocumentReference userDoc = _firestore.collection('users').doc(user.uid);
         DocumentSnapshot doc = await userDoc.get();
 
@@ -51,6 +63,7 @@ class AuthService {
           await userDoc.set({
             'email': email,
             'deviceId': currentDeviceId,
+            'role': 'student', // Default role
             'lockedAt': FieldValue.serverTimestamp(),
           }, SetOptions(merge: true));
           return null;
@@ -59,17 +72,12 @@ class AuthService {
         Map<String, dynamic> userData = doc.data() as Map<String, dynamic>;
         String? registeredDeviceId = userData['deviceId'];
 
-        if (registeredDeviceId == null || registeredDeviceId.isEmpty || force) {
-          // First time login or Forced login
-          await userDoc.update({
-            'deviceId': currentDeviceId,
-            'lockedAt': FieldValue.serverTimestamp(),
-          });
+        if (registeredDeviceId == null || registeredDeviceId.isEmpty) {
+          await userDoc.update({'deviceId': currentDeviceId, 'lockedAt': FieldValue.serverTimestamp()});
           return null;
         } else if (registeredDeviceId != currentDeviceId) {
-          // Device Mismatch!
           await _auth.signOut();
-          return "DEVICE_MISMATCH"; // Return specific code for UI to handle
+          return "DEVICE_MISMATCH";
         }
       }
       return null;
@@ -80,14 +88,11 @@ class AuthService {
     }
   }
 
-  // Check if device is still valid (for use in AuthWrapper or Periodic check)
   Future<bool> isDeviceAuthorized() async {
     User? user = _auth.currentUser;
     if (user == null) return false;
-
     String? currentId = await _getDeviceId();
     DocumentSnapshot doc = await _firestore.collection('users').doc(user.uid).get();
-    
     if (doc.exists) {
       String? registeredId = (doc.data() as Map<String, dynamic>)['deviceId'];
       return registeredId == null || registeredId.isEmpty || registeredId == currentId;
@@ -95,29 +100,16 @@ class AuthService {
     return true;
   }
 
-  // Admin Sign Up (Optional - you can use this or create manually in Console)
-  Future<String?> signUp({
-    required String email,
-    required String password,
-    required String name,
-  }) async {
+  Future<String?> signUp({required String email, required String password, required String name}) async {
     try {
-      UserCredential result = await _auth.createUserWithEmailAndPassword(
-        email: email,
-        password: password,
-      );
-      User? user = result.user;
-
-      // Note: We don't save deviceId here so that the student 
-      // can lock it during THEIR first login.
-      await _firestore.collection('users').doc(user!.uid).set({
+      UserCredential result = await _auth.createUserWithEmailAndPassword(email: email, password: password);
+      await _firestore.collection('users').doc(result.user!.uid).set({
         'name': name,
         'email': email,
-        'branch': 'Electrical Engineering',
-        'deviceId': '', // Empty initially
+        'role': 'student', // Explicitly set role
+        'deviceId': '',
         'createdAt': FieldValue.serverTimestamp(),
       });
-
       return null; 
     } on FirebaseAuthException catch (e) {
       return e.message;
@@ -126,13 +118,5 @@ class AuthService {
 
   Future<void> signOut() async {
     await _auth.signOut();
-  }
-
-  Future<String> getUserName(String uid) async {
-    DocumentSnapshot doc = await _firestore.collection('users').doc(uid).get();
-    if (doc.exists) {
-      return (doc.data() as Map<String, dynamic>)['name'] ?? 'Student';
-    }
-    return 'Student';
   }
 }

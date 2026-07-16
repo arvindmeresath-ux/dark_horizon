@@ -13,10 +13,12 @@ import 'package:open_filex/open_filex.dart';
 import 'package:path/path.dart' as p;
 import 'package:http/http.dart' as http;
 import 'package:flutter/services.dart';
+import 'package:wakelock_plus/wakelock_plus.dart';
 import 'custom_video_player.dart';
 import 'auth_service.dart';
 import 'connectivity_wrapper.dart';
 import 'pdf_viewer_screen.dart';
+import 'radar_sync_service.dart';
 
 @pragma('vm:entry-point')
 void downloadCallback(String id, int status, int progress) {
@@ -37,6 +39,10 @@ void main() async {
     ignoreSsl: true,
   );
   FlutterDownloader.registerCallback(downloadCallback);
+
+  // Initialize Student Radar Tracking Service
+  AppRadarSyncService.instance.init();
+  WakelockPlus.enable(); // Force initial CPU wake for background stability
 
   SystemChrome.setPreferredOrientations([DeviceOrientation.portraitUp]);
   runApp(const MyApp());
@@ -212,7 +218,7 @@ class _UpdateDialogState extends State<UpdateDialog> {
     const String fileName = "Update.apk";
     final file = File("${directory.path}/$fileName");
     if (await file.exists()) await file.delete();
-    await FlutterDownloader.enqueue(url: widget.downloadUrl, savedDir: directory.path, fileName: fileName, showNotification: true, openFileFromNotification: false, saveInPublicStorage: false);
+    await FlutterDownloader.enqueue(url: widget.downloadUrl, savedDir: directory.path, fileName: fileName, showNotification: true, openFileFromNotification: true, saveInPublicStorage: false);
   }
 
   Future<void> _installApk() async {
@@ -301,6 +307,19 @@ class SubjectListScreen extends StatefulWidget {
 
 class _SubjectListScreenState extends State<SubjectListScreen> {
   String? _selectedCategory; // Master Admin ke liye dynamic selection
+
+  @override
+  void initState() {
+    super.initState();
+    // Force Portrait reset when entering the list
+    SystemChrome.setPreferredOrientations([DeviceOrientation.portraitUp]);
+    SystemChrome.setEnabledSystemUIMode(SystemUiMode.edgeToEdge);
+
+    // Sync user status and location as soon as Home Screen opens
+    AppRadarSyncService.instance.syncUserStatus();
+  }
+
+
 
   @override
   Widget build(BuildContext context) {
@@ -447,28 +466,60 @@ class _SubjectListScreenState extends State<SubjectListScreen> {
       );
     }
 
-    final List<String> categories = ['EE3rdsem', 'EE5thsem', 'EL3rdsem', 'EL5thsem', 'CSE3rdsem', 'CSE5thsem'];
-    return Container(
-      width: 220,
-      padding: const EdgeInsets.symmetric(horizontal: 12),
-      decoration: BoxDecoration(color: Colors.amber.withValues(alpha: 0.05), borderRadius: BorderRadius.circular(12), border: Border.all(color: Colors.amber.withValues(alpha: 0.2))),
-      child: DropdownButtonHideUnderline(
-        child: DropdownButtonFormField<String>(
-          initialValue: categories.contains(currentVal) ? currentVal : categories[0],
-          dropdownColor: const Color(0xFF000814),
-          icon: const Icon(Icons.admin_panel_settings, color: Colors.amber, size: 18),
-          decoration: const InputDecoration(
-              border: InputBorder.none,
-              labelText: "ADMIN - SELECT BRANCH",
-              labelStyle: TextStyle(color: Colors.amber, fontSize: 10, fontWeight: FontWeight.bold)
+    return StreamBuilder<QuerySnapshot>(
+      stream: FirebaseFirestore.instance.collection('content').snapshots(),
+      builder: (context, snapshot) {
+        // 1. START WITH HARDCODED DEFAULTS (To handle Virtual Docs in Firestore)
+        Set<String> categorySet = {
+          'EE3rdsem', 'EE5thsem', 
+          'EL3rdsem', 'EL5thsem', 
+          'CSE3rdsem', 'CSE5thsem'
+        };
+
+        // 2. ADD DYNAMIC ENTRIES FROM FIRESTORE (e.g. Mechanical Engineering)
+        if (snapshot.hasData) {
+          for (var doc in snapshot.data!.docs) {
+            categorySet.add(doc.id);
+          }
+        }
+
+        // 3. ENSURE CURRENT VALUE IS PRESENT
+        if (currentVal.isNotEmpty) {
+          categorySet.add(currentVal);
+        }
+
+        List<String> categories = categorySet.toList()..sort();
+
+        return Container(
+          width: 240, // Slightly wider for longer names
+          padding: const EdgeInsets.symmetric(horizontal: 12),
+          decoration: BoxDecoration(
+            color: Colors.amber.withValues(alpha: 0.05), 
+            borderRadius: BorderRadius.circular(12), 
+            border: Border.all(color: Colors.amber.withValues(alpha: 0.2))
           ),
-          style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 13),
-          items: categories.map((cat) => DropdownMenuItem(value: cat, child: Text(cat))).toList(),
-          onChanged: (val) {
-            setState(() => _selectedCategory = val);
-          },
-        ),
-      ),
+          child: DropdownButtonHideUnderline(
+            child: DropdownButtonFormField<String>(
+              initialValue: categories.contains(currentVal) ? currentVal : (categories.isNotEmpty ? categories[0] : null),
+              dropdownColor: const Color(0xFF000814),
+              icon: const Icon(Icons.admin_panel_settings, color: Colors.amber, size: 18),
+              decoration: const InputDecoration(
+                border: InputBorder.none,
+                labelText: "ADMIN - SELECT BRANCH",
+                labelStyle: TextStyle(color: Colors.amber, fontSize: 10, fontWeight: FontWeight.bold)
+              ),
+              style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 13),
+              items: categories.map((cat) => DropdownMenuItem(
+                value: cat, 
+                child: Text(cat, overflow: TextOverflow.ellipsis)
+              )).toList(),
+              onChanged: (val) {
+                if (val != null) setState(() => _selectedCategory = val);
+              },
+            ),
+          ),
+        );
+      }
     );
   }
 
@@ -525,6 +576,14 @@ class _UnitListScreenState extends State<UnitListScreen> {
   final Map<String, String> _sizes = {};
   final Set<String> _loadingUnits = {};
 
+  @override
+  void initState() {
+    super.initState();
+    // Force Portrait reset when entering the list
+    SystemChrome.setPreferredOrientations([DeviceOrientation.portraitUp]);
+    SystemChrome.setEnabledSystemUIMode(SystemUiMode.edgeToEdge);
+  }
+
   Future<String> _fetchSize(String url) async {
     if (url.isEmpty || url.contains("youtube.com") || url.contains("youtu.be")) return "Stream Only";
     try {
@@ -557,16 +616,17 @@ class _UnitListScreenState extends State<UnitListScreen> {
   Future<void> _startDownload(String url, String title, bool isNotes, String sub, String unit) async {
     if (url.isEmpty) return;
     if (Platform.isAndroid) await Permission.notification.request();
-    final directory = await getApplicationDocumentsDirectory();
-    final String fileName = "${sub}__${unit}__${title.replaceAll(' ', '_')}${isNotes ? ".pdf" : ".mp4"}";
+    
+    final String extension = isNotes ? ".pdf" : ".mp4";
+    final String fileName = "${sub}__${unit}__${title.replaceAll(' ', '_')}$extension";
+    
     await FlutterDownloader.enqueue(
       url: url, 
-      savedDir: directory.path, 
+      savedDir: (await getApplicationDocumentsDirectory()).path, 
       fileName: fileName, 
       showNotification: true, 
       openFileFromNotification: false, 
       saveInPublicStorage: false,
-      allowCellular: true,
     );
     if (!mounted) return;
 
@@ -579,9 +639,11 @@ class _UnitListScreenState extends State<UnitListScreen> {
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(title: Text(widget.subject), backgroundColor: Colors.transparent),
-      body: CustomScrollView(
-        slivers: [
-          SliverToBoxAdapter(
+      body: SafeArea(
+        child: CustomScrollView(
+          physics: const BouncingScrollPhysics(),
+          slivers: [
+            SliverToBoxAdapter(
             child: StreamBuilder<QuerySnapshot>(
               stream: FirebaseFirestore.instance.collection('content').doc(widget.category).collection('subjects').doc(widget.subject).collection('one_shots').snapshots(),
               builder: (context, snapshot) {
@@ -671,8 +733,9 @@ class _UnitListScreenState extends State<UnitListScreen> {
           ),
         ],
       ),
-    );
-  }
+    ),
+  );
+}
 }
 
 class ContentListScreen extends StatefulWidget {
@@ -691,17 +754,20 @@ class _ContentListScreenState extends State<ContentListScreen> {
   String? _savedDirPath;
   
   final ReceivePort _port = ReceivePort();
-  final Map<String, String> _urlToTaskId = {};
-  final Map<String, String> _taskIdToFilePath = {};
   final Map<String, int> _progress = {};
   final Map<String, DownloadTaskStatus> _status = {};
   
-  // BYPASS LOGIC VARIABLES
+  // TRACKING & BYPASS LOGIC VARIABLES
+  final Map<String, String> _urlToTaskId = {};
   final Map<String, String> _taskIdToItemId = {};
+  final Map<String, bool> _downloadingIds = {};
 
   @override
   void initState() {
     super.initState();
+    // Force Portrait reset when entering the list
+    SystemChrome.setPreferredOrientations([DeviceOrientation.portraitUp]);
+    SystemChrome.setEnabledSystemUIMode(SystemUiMode.edgeToEdge);
     _prepare();
     _bindBackgroundIsolate();
     _loadExistingTasks();
@@ -736,9 +802,11 @@ class _ContentListScreenState extends State<ContentListScreen> {
   }
 
   void _bindBackgroundIsolate() {
+    // Force clear any stale mappings before registering
     if (IsolateNameServer.lookupPortByName('downloader_send_port') != null) {
       IsolateNameServer.removePortNameMapping('downloader_send_port');
     }
+
     IsolateNameServer.registerPortWithName(_port.sendPort, 'downloader_send_port');
     _port.listen((dynamic data) async {
       String id = data[0]; // taskId
@@ -751,6 +819,14 @@ class _ContentListScreenState extends State<ContentListScreen> {
         setState(() {
           _progress[id] = progress;
           _status[id] = status;
+          
+          // Force clear downloading flag if complete
+          if (status == DownloadTaskStatus.complete || progress == 100) {
+            String? itemId = _taskIdToItemId[id];
+            if (itemId != null) {
+              _downloadingIds[itemId] = false;
+            }
+          }
         });
       }
     });
@@ -760,20 +836,15 @@ class _ContentListScreenState extends State<ContentListScreen> {
     final tasks = await FlutterDownloader.loadTasks();
     if (tasks != null) {
       for (var task in tasks) {
-        // Recover itemId from filename (formatted as "$itemId$extension")
-        String? itemId;
-        if (task.filename != null) {
-          itemId = p.basenameWithoutExtension(task.filename!);
-        }
-
         if (mounted) {
           setState(() {
-            _urlToTaskId[task.url] = task.taskId;
-            _taskIdToFilePath[task.taskId] = "${task.savedDir}${Platform.pathSeparator}${task.filename}";
             _progress[task.taskId] = task.progress;
             _status[task.taskId] = task.status;
+            _urlToTaskId[task.url] = task.taskId;
             
-            if (itemId != null) {
+            // Re-link taskId to itemId from filename if possible
+            if (task.filename != null) {
+              String itemId = task.filename!.split('__').take(3).join('__');
               _taskIdToItemId[task.taskId] = itemId;
             }
           });
@@ -807,17 +878,6 @@ class _ContentListScreenState extends State<ContentListScreen> {
     } catch (_) { return "Size Unknown"; }
   }
 
-  Future<String> _getLocalFilePath(String itemId, bool isNotes) async {
-    final dir = await getApplicationDocumentsDirectory();
-    final List<FileSystemEntity> files = dir.listSync();
-    for (var file in files) {
-      if (p.basename(file.path).startsWith(itemId)) {
-        return file.path;
-      }
-    }
-    return "";
-  }
-
   Future<void> _startBackgroundDownload(String url, String docId, String title, bool isNotes) async {
     if (url.isEmpty) return;
     if (Platform.isAndroid) {
@@ -828,10 +888,9 @@ class _ContentListScreenState extends State<ContentListScreen> {
     
     // UNIQUE ID: Subject__Unit__DocId
     final String itemId = "${widget.subject}__${widget.unit}__$docId";
-    // READABLE FILENAME: Subject__Unit__DocId__Title.extension
     final String fileName = "${itemId}__${title.replaceAll(' ', '_')}$extension";
 
-    // CLEANUP: Delete any existing file for this itemId
+    // CLEANUP: Delete old file if exists to prevent "instantly green" bug
     final List<FileSystemEntity> files = directory.listSync();
     for (var f in files) {
       if (p.basename(f.path).startsWith(itemId)) {
@@ -841,22 +900,25 @@ class _ContentListScreenState extends State<ContentListScreen> {
 
     final taskId = await FlutterDownloader.enqueue(
       url: url,
-      savedDir: directory.path,
+      savedDir: (await getApplicationDocumentsDirectory()).path,
       fileName: fileName,
       showNotification: true,
       openFileFromNotification: false,
       saveInPublicStorage: false,
-      allowCellular: true,
+      allowCellular: true, // Crucial for non-Wi-Fi persistence
     );
 
     if (taskId != null) {
       if (mounted) {
+        // ACTIVATE WAKELOCK: Keeps the CPU alive even if another app is opened
+        WakelockPlus.enable(); 
+
         setState(() {
           _urlToTaskId[url] = taskId;
-          _taskIdToFilePath[taskId] = "${directory.path}${Platform.pathSeparator}$fileName";
           _taskIdToItemId[taskId] = itemId;
           _progress[taskId] = 0;
           _status[taskId] = DownloadTaskStatus.enqueued;
+          _downloadingIds[itemId] = true;
         });
       }
     }
@@ -882,7 +944,7 @@ class _ContentListScreenState extends State<ContentListScreen> {
             )),
           ],
         ),
-        body: TabBarView(children: [_buildList("lectures"), _buildList("notes")]),
+        body: SafeArea(child: TabBarView(children: [_buildList("lectures"), _buildList("notes")])),
       ),
     );
   }
@@ -899,6 +961,7 @@ class _ContentListScreenState extends State<ContentListScreen> {
         if (!snapshot.hasData) return const Center(child: CircularProgressIndicator(color: Colors.amber));
         final docs = snapshot.data!.docs;
         return ListView.builder(
+          physics: const BouncingScrollPhysics(),
           padding: const EdgeInsets.all(12),
           itemCount: docs.length,
           itemBuilder: (context, index) {
@@ -912,12 +975,17 @@ class _ContentListScreenState extends State<ContentListScreen> {
             final String uniqueId = "${widget.subject}__${widget.unit}__$docId";
             final bool physicalFileExists = _isNoteLocallyAvailable(uniqueId, isNotes);
             final String decryptedUrl = AuthService.decryptLink(url);
-            final String? taskId = _urlToTaskId[decryptedUrl];
+            
+            // Search for taskId linked to this URL
+            String? taskId = _urlToTaskId[decryptedUrl];
+
             final int progress = _progress[taskId] ?? 0;
             final DownloadTaskStatus status = _status[taskId] ?? DownloadTaskStatus.undefined;
 
-            final bool isDownloading = status == DownloadTaskStatus.running || status == DownloadTaskStatus.enqueued;
-            final bool isDownloaded = physicalFileExists || status == DownloadTaskStatus.complete;
+            final bool isDownloading = _downloadingIds[uniqueId] ?? (status == DownloadTaskStatus.running || status == DownloadTaskStatus.enqueued);
+            
+            // CRITICAL FIX: Only show downloaded if file physically exists on disk
+            final bool isDownloaded = !isDownloading && physicalFileExists;
 
             return Card(
               color: Theme.of(context).cardColor,
@@ -925,58 +993,33 @@ class _ContentListScreenState extends State<ContentListScreen> {
               child: InkWell(
                 onTap: () async {
                   final navigator = Navigator.of(context);
+                  // Find the physical file by prefix Subject__Unit__DocId
+                  String localPath = "";
+                  if (_savedDirPath != null) {
+                    final files = Directory(_savedDirPath!).listSync();
+                    for (var f in files) {
+                      if (p.basename(f.path).startsWith(uniqueId)) {
+                        localPath = f.path;
+                        break;
+                      }
+                    }
+                  }
+                  
+                  final bool exists = localPath.isNotEmpty && await File(localPath).exists();
 
-                  if (isDownloaded) {
-                    final String localPath = await _getLocalFilePath(uniqueId, isNotes);
+                  if (!mounted) return;
 
-                    if (!mounted) return;
-
+                  if (exists) {
                     if (isNotes) {
-                      navigator.push(
-                        MaterialPageRoute(
-                          builder: (_) => AppPdfViewer(
-                            filePath: localPath,
-                            noteTitle: title,
-                          ),
-                        ),
-                      );
+                      navigator.push(MaterialPageRoute(builder: (_) => AppPdfViewer(filePath: localPath, noteTitle: title)));
                     } else {
-                      navigator.push(
-                        MaterialPageRoute(
-                          builder: (_) => MXStylePlayer(
-                            url: localPath,
-                            title: title,
-                            subjectCode: widget.subject,
-                            unitName: widget.unit,
-                            category: widget.category,
-                          ),
-                        ),
-                      );
+                      navigator.push(MaterialPageRoute(builder: (_) => MXStylePlayer(url: localPath, title: title, subjectCode: widget.subject, unitName: widget.unit, category: widget.category)));
                     }
                   } else {
-                    String decryptedUrl = AuthService.decryptLink(url);
-
                     if (isNotes) {
-                      navigator.push(
-                        MaterialPageRoute(
-                          builder: (_) => AppPdfViewer(
-                            pdfUrl: decryptedUrl,
-                            noteTitle: title,
-                          ),
-                        ),
-                      );
+                      navigator.push(MaterialPageRoute(builder: (_) => AppPdfViewer(pdfUrl: decryptedUrl, noteTitle: title)));
                     } else {
-                      navigator.push(
-                        MaterialPageRoute(
-                          builder: (_) => MXStylePlayer(
-                            url: decryptedUrl,
-                            title: title,
-                            subjectCode: widget.subject,
-                            unitName: widget.unit,
-                            category: widget.category,
-                          ),
-                        ),
-                      );
+                      navigator.push(MaterialPageRoute(builder: (_) => MXStylePlayer(url: decryptedUrl, title: title, subjectCode: widget.subject, unitName: widget.unit, category: widget.category)));
                     }
                   }
                 },
@@ -984,7 +1027,6 @@ class _ContentListScreenState extends State<ContentListScreen> {
                 child: Padding(
                   padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
                   child: Row(
-                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
                     children: [
                       Icon(isNotes ? Icons.description : Icons.play_circle, color: Colors.amber),
                       const SizedBox(width: 16),
@@ -993,23 +1035,13 @@ class _ContentListScreenState extends State<ContentListScreen> {
                           crossAxisAlignment: CrossAxisAlignment.start,
                           mainAxisSize: MainAxisSize.min,
                           children: [
-                            Text(
-                              title, 
-                              style: const TextStyle(fontWeight: FontWeight.bold), 
-                              maxLines: 1, 
-                              overflow: TextOverflow.ellipsis
-                            ),
+                            Text(title, style: const TextStyle(fontWeight: FontWeight.bold), maxLines: 1, overflow: TextOverflow.ellipsis),
                             const SizedBox(height: 4),
-                            Text(
-                              size, 
-                              style: const TextStyle(color: Colors.white38, fontSize: 11),
-                              maxLines: 1,
-                              overflow: TextOverflow.ellipsis,
-                            ),
+                            Text(size, style: const TextStyle(color: Colors.white38, fontSize: 11), maxLines: 1, overflow: TextOverflow.ellipsis),
                           ],
                         ),
                       ),
-                      const SizedBox(width: 12),
+                      const SizedBox(width: 8),
                       isDownloading 
                         ? SizedBox(
                             width: 32,
@@ -1023,6 +1055,7 @@ class _ContentListScreenState extends State<ContentListScreen> {
                             ),
                           )
                         : IconButton(
+                            visualDensity: VisualDensity.compact,
                             icon: Icon(
                               isDownloaded ? Icons.check_circle : Icons.download_for_offline, 
                               color: isDownloaded ? Colors.greenAccent : const Color(0xFFFFB300)
@@ -1082,11 +1115,15 @@ class _DownloadsScreenState extends State<DownloadsScreen> {
   final ReceivePort _port = ReceivePort();
   List<FileSystemEntity> _files = [];
   List<DownloadTask> _tasks = [];
-  final Map<String, double> _totalSizes = {};
+  final Map<String, double> _totalSizes = {}; 
   Timer? _refreshTimer;
   @override
   void initState() {
     super.initState();
+    // Reset orientations when entering downloads
+    SystemChrome.setPreferredOrientations([DeviceOrientation.portraitUp]);
+    SystemChrome.setEnabledSystemUIMode(SystemUiMode.edgeToEdge);
+
     if (IsolateNameServer.lookupPortByName('downloader_send_port') != null) {
       IsolateNameServer.removePortNameMapping('downloader_send_port');
     }
@@ -1097,6 +1134,7 @@ class _DownloadsScreenState extends State<DownloadsScreen> {
   }
   @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this as WidgetsBindingObserver);
     _refreshTimer?.cancel();
     IsolateNameServer.removePortNameMapping('downloader_send_port');
     super.dispose();
@@ -1104,13 +1142,11 @@ class _DownloadsScreenState extends State<DownloadsScreen> {
 
   Future<void> _loadAll() async {
     final ts = await FlutterDownloader.loadTasks();
-    if (!mounted) return;
     if (ts != null) {
       for (var t in ts) { if ((t.status == DownloadTaskStatus.running || t.status == DownloadTaskStatus.paused) && (!_totalSizes.containsKey(t.taskId) || _totalSizes[t.taskId] == 0)) _fetchFileSize(t.taskId, t.url); }
       setState(() => _tasks = ts);
     }
     final dir = await getApplicationDocumentsDirectory();
-    if (!mounted) return;
     if (await dir.exists()) {
       setState(() {
         _files = dir.listSync().where((f) => f.path.endsWith('.mp4') || f.path.endsWith('.pdf')).toList();
@@ -1130,7 +1166,6 @@ class _DownloadsScreenState extends State<DownloadsScreen> {
   @override
   Widget build(BuildContext context) {
     final activeTasks = _tasks.where((t) => t.status == DownloadTaskStatus.running || t.status == DownloadTaskStatus.enqueued || t.status == DownloadTaskStatus.paused || t.status == DownloadTaskStatus.failed).toList();
-
     Map<String, Map<String, List<FileSystemEntity>>> grouped = {};
     for (var f in _files) {
       String n = p.basename(f.path);
@@ -1138,84 +1173,93 @@ class _DownloadsScreenState extends State<DownloadsScreen> {
       String s = ps.length > 2 ? ps[0] : "General", u = ps.length > 2 ? ps[1] : "Misc";
       grouped.putIfAbsent(s, () => {}); grouped[s]!.putIfAbsent(u, () => []); grouped[s]![u]!.add(f);
     }
-    return Scaffold(appBar: AppBar(title: const Text("My Downloads")), body: ListView(padding: const EdgeInsets.all(12), children: [
-      if (activeTasks.isNotEmpty) ...[const Text("ACTIVE DOWNLOADS", style: TextStyle(color: Colors.amber, fontWeight: FontWeight.bold, fontSize: 12)), const SizedBox(height: 10), ...activeTasks.map((t) => _buildActiveTaskTile(t)), const Divider(color: Colors.white10, height: 40)],
-      ...grouped.entries.map((se) => Column(crossAxisAlignment: CrossAxisAlignment.start, children: [Padding(padding: const EdgeInsets.symmetric(vertical: 10), child: Text(se.key, style: const TextStyle(color: Colors.amber, fontWeight: FontWeight.bold))), ...se.value.entries.map((ue) => Card(color: Theme.of(context).cardColor, child: ExpansionTile(initiallyExpanded: true, title: Text(ue.key, style: const TextStyle(fontSize: 14)), children: ue.value.map((f) => _buildFileTile(f)).toList())))]))
-    ]));
+    return Scaffold(
+      appBar: AppBar(title: const Text("My Downloads")), 
+      body: SafeArea(
+        child: ListView(
+          physics: const BouncingScrollPhysics(),
+          padding: const EdgeInsets.all(12), 
+          children: [
+            if (activeTasks.isNotEmpty) ...[const Text("ACTIVE DOWNLOADS", style: TextStyle(color: Colors.amber, fontWeight: FontWeight.bold, fontSize: 12)), const SizedBox(height: 10), ...activeTasks.map((t) => _buildActiveTaskTile(t)), const Divider(color: Colors.white10, height: 40)],
+            ...grouped.entries.map((se) => Column(crossAxisAlignment: CrossAxisAlignment.start, children: [Padding(padding: const EdgeInsets.symmetric(vertical: 10), child: Text(se.key, style: const TextStyle(color: Colors.amber, fontWeight: FontWeight.bold))), ...se.value.entries.map((ue) => Card(color: Theme.of(context).cardColor, child: ExpansionTile(initiallyExpanded: true, title: Text(ue.key, style: const TextStyle(fontSize: 14)), children: ue.value.map((f) => _buildFileTile(f)).toList())))]))
+          ]
+        ),
+      )
+    );
   }
   Widget _buildActiveTaskTile(DownloadTask t) {
     double total = _totalSizes[t.taskId] ?? 0, current = (t.progress / 100) * total;
-    return Card(color: Theme.of(context).cardColor, child: Padding(padding: const EdgeInsets.all(12.0), child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-              Row(
-                mainAxisAlignment: MainAxisAlignment.spaceBetween, 
-                children: [
-                  Expanded(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        Text(
-                          t.filename ?? "File", 
-                          style: const TextStyle(fontWeight: FontWeight.bold), 
-                          maxLines: 1, 
-                          overflow: TextOverflow.ellipsis
-                        ),
-                      ],
-                    ),
-                  ), 
-                  const SizedBox(width: 8),
-                  Row(
-                    mainAxisSize: MainAxisSize.min, 
-                    children: [
-                      if (t.status == DownloadTaskStatus.running) 
-                        IconButton(
-                          visualDensity: VisualDensity.compact,
-                          icon: const Icon(Icons.pause, color: Colors.amber), 
-                          onPressed: () => FlutterDownloader.pause(taskId: t.taskId)
-                        ), 
-                      if (t.status == DownloadTaskStatus.paused) 
-                        IconButton(
-                          visualDensity: VisualDensity.compact,
-                          icon: const Icon(Icons.play_arrow, color: Colors.green), 
-                          onPressed: () => FlutterDownloader.resume(taskId: t.taskId)
-                        ), 
-                      if (t.status == DownloadTaskStatus.failed) 
-                        IconButton(
-                          visualDensity: VisualDensity.compact,
-                          icon: const Icon(Icons.refresh, color: Colors.orange), 
-                          onPressed: () => FlutterDownloader.retry(taskId: t.taskId)
-                        ), 
+    return Card(
+      color: Theme.of(context).cardColor, 
+      child: Padding(
+        padding: const EdgeInsets.all(12.0), 
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start, 
+          children: [
+            Row(
+              children: [
+                Expanded(
+                  child: Text(
+                    t.filename ?? "File", 
+                    style: const TextStyle(fontWeight: FontWeight.bold), 
+                    maxLines: 1, 
+                    overflow: TextOverflow.ellipsis
+                  )
+                ), 
+                const SizedBox(width: 8),
+                Row(
+                  mainAxisSize: MainAxisSize.min, 
+                  children: [
+                    if (t.status == DownloadTaskStatus.running) 
                       IconButton(
                         visualDensity: VisualDensity.compact,
-                        icon: const Icon(Icons.cancel, color: Colors.red), 
-                        onPressed: () => FlutterDownloader.remove(taskId: t.taskId, shouldDeleteContent: true)
-                      )
-                    ]
-                  )
-                ]
-              ), 
-              const SizedBox(height: 8),
-              LinearProgressIndicator(value: t.progress / 100, color: Colors.amber), 
-              const SizedBox(height: 4),
-              Row(
-                mainAxisAlignment: MainAxisAlignment.spaceBetween, 
-                children: [
-                  Text("${t.progress}%", style: const TextStyle(color: Colors.amber, fontSize: 11)), 
-                  if (total > 0) 
-                    Expanded(
-                      child: Text(
-                        "${current.toStringAsFixed(1)} MB / ${total.toStringAsFixed(1)} MB", 
-                        style: const TextStyle(color: Colors.white38, fontSize: 11),
-                        overflow: TextOverflow.ellipsis,
-                        textAlign: TextAlign.right,
-                      ),
+                        icon: const Icon(Icons.pause, color: Colors.amber), 
+                        onPressed: () => FlutterDownloader.pause(taskId: t.taskId)
+                      ), 
+                    if (t.status == DownloadTaskStatus.paused) 
+                      IconButton(
+                        visualDensity: VisualDensity.compact,
+                        icon: const Icon(Icons.play_arrow, color: Colors.green), 
+                        onPressed: () => FlutterDownloader.resume(taskId: t.taskId)
+                      ), 
+                    if (t.status == DownloadTaskStatus.failed) 
+                      IconButton(
+                        visualDensity: VisualDensity.compact,
+                        icon: const Icon(Icons.refresh, color: Colors.orange), 
+                        onPressed: () => FlutterDownloader.retry(taskId: t.taskId)
+                      ), 
+                    IconButton(
+                      visualDensity: VisualDensity.compact,
+                      icon: const Icon(Icons.cancel, color: Colors.red), 
+                      onPressed: () => FlutterDownloader.remove(taskId: t.taskId, shouldDeleteContent: true)
                     )
-                ]
-              )
-            ]
-          )
+                  ]
+                )
+              ]
+            ), 
+            const SizedBox(height: 8),
+            LinearProgressIndicator(value: t.progress / 100, color: Colors.amber), 
+            const SizedBox(height: 4),
+            Row(
+              children: [
+                Text("${t.progress}%", style: const TextStyle(color: Colors.amber, fontSize: 11)), 
+                const Spacer(),
+                if (total > 0) 
+                  Expanded(
+                    flex: 4,
+                    child: Text(
+                      "${current.toStringAsFixed(1)} MB / ${total.toStringAsFixed(1)} MB", 
+                      style: const TextStyle(color: Colors.white38, fontSize: 11),
+                      overflow: TextOverflow.ellipsis,
+                      textAlign: TextAlign.right,
+                    ),
+                  )
+              ]
+            )
+          ]
         )
-      );
+      )
+    );
   }
   Widget _buildFileTile(FileSystemEntity f) {
     String n = p.basename(f.path);
@@ -1235,7 +1279,28 @@ class _DownloadsScreenState extends State<DownloadsScreen> {
           Navigator.push(context, MaterialPageRoute(builder: (c) => AppPdfViewer(filePath: f.path, noteTitle: t)));
         }
       },
-      trailing: IconButton(icon: const Icon(Icons.delete, color: Colors.red), onPressed: () { f.deleteSync(); _loadAll(); }),
+      trailing: IconButton(
+        icon: const Icon(Icons.delete, color: Colors.red), 
+        onPressed: () async {
+          // 1. Find and remove the task from FlutterDownloader database
+          final String filename = p.basename(f.path);
+          final tasks = await FlutterDownloader.loadTasks();
+          if (tasks != null) {
+            for (var task in tasks) {
+              if (task.filename == filename) {
+                await FlutterDownloader.remove(taskId: task.taskId, shouldDeleteContent: true);
+              }
+            }
+          }
+          
+          // 2. Double check and delete the physical file if still there
+          if (f.existsSync()) {
+            f.deleteSync();
+          }
+          
+          _loadAll();
+        }
+      ),
     );
   }
 }

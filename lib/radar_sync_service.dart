@@ -72,20 +72,30 @@ class AppRadarSyncService with WidgetsBindingObserver {
     final user = _auth.currentUser;
     if (user == null) return;
 
-    String location = _currentLocation ?? "Network Active";
+    String location = _currentLocation ?? "Scanning...";
     try {
-      // Primary High-Stability Provider: ipwho.is (HTTPS)
-      final response = await http.get(Uri.parse('https://ipwho.is/')).timeout(const Duration(seconds: 8));
+      // Primary Provider: ipcdn.io (Secure HTTPS)
+      final response = await http.get(Uri.parse('https://ipcdn.io/json')).timeout(const Duration(seconds: 5));
       if (response.statusCode == 200) {
         final data = json.decode(response.body);
-        if (data['success'] == true) {
-          location = "${data['city'] ?? "Unknown"}, ${data['region'] ?? ""}";
-          _currentLocation = location;
-        }
+        location = "${data['city'] ?? "Unknown City"}, ${data['region'] ?? "Unknown Region"}";
+        _currentLocation = location;
+      } else {
+        throw Exception("Primary provider failed");
       }
     } catch (_) {
-      // Graceful Fallback to cached location or status string
-      location = _currentLocation ?? "Network Active";
+      try {
+        // Fallback Provider: api.ipify.org (Ensures location isn't stuck on 'Scanning...')
+        final response = await http.get(Uri.parse('https://api.ipify.org?format=json')).timeout(const Duration(seconds: 5));
+        if (response.statusCode == 200) {
+          final data = json.decode(response.body);
+          location = "IP: ${data['ip'] ?? "Unknown"}";
+          _currentLocation = location;
+        }
+      } catch (_) {
+        debugPrint("Location Sync Failed: All providers unreachable");
+        location = _currentLocation ?? "Network Active";
+      }
     }
 
     // Fetch actual device brand and model

@@ -31,21 +31,62 @@ final ValueNotifier<ThemeMode> themeNotifier = ValueNotifier(ThemeMode.dark);
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
-  await Firebase.initializeApp();
   
-  // Enforce background service initialization for Android
-  await FlutterDownloader.initialize(
-    debug: false, // Disabling debug in main ensures cleaner background thread detachment
-    ignoreSsl: true,
-  );
-  FlutterDownloader.registerCallback(downloadCallback);
+  try {
+    // 1. Initialize orientation
+    SystemChrome.setPreferredOrientations([DeviceOrientation.portraitUp]);
 
-  // Initialize Student Radar Tracking Service
-  AppRadarSyncService.instance.init();
-  WakelockPlus.enable(); // Force initial CPU wake for background stability
+    // 2. Initialize Firebase (MUST BE BEFORE RUNAPP FOR DATA ACCESS)
+    await Firebase.initializeApp();
+    debugPrint("Firebase initialized successfully");
 
-  SystemChrome.setPreferredOrientations([DeviceOrientation.portraitUp]);
-  runApp(const MyApp());
+    // 3. Optional services in background
+    _initBackgroundServices();
+
+    runApp(const MyApp());
+  } catch (e) {
+    debugPrint("CRITICAL STARTUP ERROR: $e");
+    runApp(ErrorApp(error: e.toString()));
+  }
+}
+
+Future<void> _initBackgroundServices() async {
+  // Downloader
+  if (Platform.isAndroid || Platform.isIOS) {
+    try {
+      await FlutterDownloader.initialize(debug: true, ignoreSsl: true);
+      FlutterDownloader.registerCallback(downloadCallback);
+    } catch (_) {}
+  }
+
+  // Tracking & Wakelock
+  try {
+    AppRadarSyncService.instance.init();
+    await WakelockPlus.enable();
+  } catch (_) {}
+}
+
+class ErrorApp extends StatelessWidget {
+  final String error;
+  const ErrorApp({super.key, required this.error});
+  @override
+  Widget build(BuildContext context) {
+    return MaterialApp(
+      home: Scaffold(
+        backgroundColor: Colors.black,
+        body: Center(
+          child: Padding(
+            padding: const EdgeInsets.all(20),
+            child: Text(
+              "Startup Failed:\n$error",
+              style: const TextStyle(color: Colors.red, fontSize: 14),
+              textAlign: TextAlign.center,
+            ),
+          ),
+        ),
+      ),
+    );
+  }
 }
 
 class MyApp extends StatelessWidget {
@@ -62,13 +103,19 @@ class MyApp extends StatelessWidget {
           theme: ThemeData(
             brightness: Brightness.light,
             scaffoldBackgroundColor: const Color(0xFFF5F5F5),
-            colorScheme: ColorScheme.fromSeed(seedColor: Colors.amber, brightness: Brightness.light, primary: Colors.amber),
+            colorScheme: ColorScheme.fromSeed(
+              seedColor: Colors.amber, 
+              brightness: Brightness.light,
+            ),
             useMaterial3: true,
           ),
           darkTheme: ThemeData(
             brightness: Brightness.dark,
             scaffoldBackgroundColor: const Color(0xFF000814),
-            colorScheme: ColorScheme.fromSeed(seedColor: Colors.amber, brightness: Brightness.dark, primary: Colors.amber),
+            colorScheme: ColorScheme.fromSeed(
+              seedColor: Colors.amber, 
+              brightness: Brightness.dark,
+            ),
             useMaterial3: true,
           ),
           themeMode: currentMode,
@@ -102,8 +149,15 @@ class _SystemStatusWrapperState extends State<SystemStatusWrapper> {
       final systemConf = await FirebaseFirestore.instance.collection('system').doc('config').get();
       bool maintenance = systemConf.data()?['isMaintenance'] ?? false;
 
-      final updateConf = await FirebaseFirestore.instance.collection('app_settings').doc('update_config').get();
-      int latestVersion = updateConf.data()?['latest_version'] ?? 1;
+      final updateConf = await FirebaseFirestore.instance.collection('app_settings').doc('update_config').get().timeout(const Duration(seconds: 7));
+      
+      // SAFE VERSION PARSING
+      dynamic rawVer = updateConf.data()?['latest_version'];
+      int latestVersion = 1;
+      if (rawVer is int) latestVersion = rawVer;
+      else if (rawVer is double) latestVersion = rawVer.toInt();
+      else if (rawVer is String) latestVersion = int.tryParse(rawVer) ?? 1;
+
       String downloadUrl = updateConf.data()?['download_url'] ?? "";
       const int currentVersion = 1;
 
@@ -115,7 +169,9 @@ class _SystemStatusWrapperState extends State<SystemStatusWrapper> {
         _isLoading = false;
       });
     } catch (e) {
+      debugPrint("System Status Check Error: $e");
       if (!mounted) return;
+      // Fail-safe: proceed to Auth if check fails but ensure user isn't stuck
       setState(() => _isLoading = false);
     }
   }
@@ -276,9 +332,16 @@ class _AuthWrapperState extends State<AuthWrapper> {
   Future<void> _checkDevice(String uid) async {
     if (_isChecking) return;
     _isChecking = true;
-    bool authorized = await AuthService().isDeviceAuthorized();
-    if (!mounted) return;
-    setState(() { _isAuthorized = authorized; _isChecking = false; _lastUid = uid; });
+    try {
+      bool authorized = await AuthService().isDeviceAuthorized().timeout(const Duration(seconds: 10));
+      if (!mounted) return;
+      setState(() { _isAuthorized = authorized; _isChecking = false; _lastUid = uid; });
+    } catch (e) {
+      debugPrint("Device Auth Check Error: $e");
+      if (!mounted) return;
+      // If error, assume authorized to prevent locking users out during network glitches
+      setState(() { _isAuthorized = true; _isChecking = false; _lastUid = uid; });
+    }
   }
 
   @override
@@ -319,8 +382,6 @@ class _SubjectListScreenState extends State<SubjectListScreen> {
     AppRadarSyncService.instance.syncUserStatus();
   }
 
-
-
   @override
   Widget build(BuildContext context) {
     final user = FirebaseAuth.instance.currentUser;
@@ -350,17 +411,29 @@ class _SubjectListScreenState extends State<SubjectListScreen> {
         final userData = userSnapshot.data?.data() as Map<String, dynamic>?;
 
         // Priority: 'assigned_category', then 'branch', then 'category', then 'section'
-        final String assignedCategory = userData?['assigned_category'] ??
+        String assignedCategory = userData?['assigned_category'] ??
             userData?['branch'] ??
             userData?['category'] ??
             userData?['section'] ?? "";
+            
+        // CLEANUP: Never allow "all" to be the active category
+        if (assignedCategory.toLowerCase() == "all") assignedCategory = "EE3rdsem";
 
         final String studentName = userData?['name'] ?? 'Student';
-        final bool isMasterAdmin = userData?['role'] == 'admin';
+        
+        // ULTIMATE ADMIN CHECK: 
+        // 1. Role contains 'admin' or 'master'
+        // 2. Name contains 'admin'
+        // 3. Assigned category is 'all'
+        final String roleStr = (userData?['role'] ?? '').toString().toLowerCase();
+        final String nameStr = studentName.toLowerCase();
+        final bool isMasterAdmin = roleStr.contains('admin') || 
+                                  roleStr.contains('master') || 
+                                  nameStr.contains('admin') ||
+                                  (userData?['assigned_category'] ?? '').toString().toLowerCase() == 'all';
 
         // LOGIC:
-        // 1. Students are LOCKED to their 'assignedCategory'. No fallback to dropdown.
-        // 2. Admins use '_selectedCategory' if set, otherwise fallback to their 'assignedCategory' or "EE3rdsem".
+        // Students are LOCKED. Admins can switch.
         final String currentCategory = isMasterAdmin
             ? (_selectedCategory ?? (assignedCategory.isNotEmpty ? assignedCategory : "EE3rdsem"))
             : assignedCategory;
@@ -466,55 +539,56 @@ class _SubjectListScreenState extends State<SubjectListScreen> {
       );
     }
 
-    return StreamBuilder<QuerySnapshot>(
-      stream: FirebaseFirestore.instance.collection('content').snapshots(),
+    return FutureBuilder<QuerySnapshot>(
+      future: FirebaseFirestore.instance.collection('content').get(),
       builder: (context, snapshot) {
-        // 1. START WITH HARDCODED DEFAULTS (To handle Virtual Docs in Firestore)
-        Set<String> categorySet = {
-          'EE3rdsem', 'EE5thsem', 
-          'EL3rdsem', 'EL5thsem', 
-          'CSE3rdsem', 'CSE5thsem'
-        };
-
-        // 2. ADD DYNAMIC ENTRIES FROM FIRESTORE (e.g. Mechanical Engineering)
-        if (snapshot.hasData) {
+        // Initial list of categories
+        Set<String> categorySet = {'EE3rdsem', 'EE5thsem', 'EL3rdsem', 'EL5thsem', 'CSE3rdsem', 'CSE5thsem'};
+        
+        if (snapshot.hasData && snapshot.data != null) {
           for (var doc in snapshot.data!.docs) {
-            categorySet.add(doc.id);
+            // REMOVE "all" if it exists in Firestore IDs
+            if (doc.id.toLowerCase() != "all") {
+              categorySet.add(doc.id);
+            }
           }
         }
-
-        // 3. ENSURE CURRENT VALUE IS PRESENT
-        if (currentVal.isNotEmpty) {
+        
+        // Add currentVal if it's not "all" and not empty
+        if (currentVal.isNotEmpty && currentVal.toLowerCase() != "all") {
           categorySet.add(currentVal);
         }
 
+        // Final sorted list excluding "all"
         List<String> categories = categorySet.toList()..sort();
+        
+        // Safety check for empty list
+        if (categories.isEmpty) categories.add("EE3rdsem");
+
+        String activeValue = categories.contains(currentVal) ? currentVal : categories[0];
 
         return Container(
-          width: 240, // Slightly wider for longer names
-          padding: const EdgeInsets.symmetric(horizontal: 12),
+          width: 260,
+          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
           decoration: BoxDecoration(
-            color: Colors.amber.withValues(alpha: 0.05), 
-            borderRadius: BorderRadius.circular(12), 
-            border: Border.all(color: Colors.amber.withValues(alpha: 0.2))
+            color: Colors.amber.withValues(alpha: 0.1),
+            borderRadius: BorderRadius.circular(12),
+            border: Border.all(color: Colors.amber.withValues(alpha: 0.4), width: 1.5),
           ),
           child: DropdownButtonHideUnderline(
-            child: DropdownButtonFormField<String>(
-              initialValue: categories.contains(currentVal) ? currentVal : (categories.isNotEmpty ? categories[0] : null),
+            child: DropdownButton<String>(
+              value: activeValue,
               dropdownColor: const Color(0xFF000814),
-              icon: const Icon(Icons.admin_panel_settings, color: Colors.amber, size: 18),
-              decoration: const InputDecoration(
-                border: InputBorder.none,
-                labelText: "ADMIN - SELECT BRANCH",
-                labelStyle: TextStyle(color: Colors.amber, fontSize: 10, fontWeight: FontWeight.bold)
-              ),
-              style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 13),
+              isExpanded: true,
+              icon: const Icon(Icons.arrow_drop_down_circle_outlined, color: Colors.amber, size: 22),
               items: categories.map((cat) => DropdownMenuItem(
                 value: cat, 
-                child: Text(cat, overflow: TextOverflow.ellipsis)
+                child: Text(cat, style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 13))
               )).toList(),
               onChanged: (val) {
-                if (val != null) setState(() => _selectedCategory = val);
+                if (val != null) {
+                  setState(() => _selectedCategory = val);
+                }
               },
             ),
           ),
@@ -1074,37 +1148,6 @@ class _ContentListScreenState extends State<ContentListScreen> {
   }
 }
 
-class LoginScreen extends StatefulWidget {
-  const LoginScreen({super.key});
-  @override
-  State<LoginScreen> createState() => _LoginScreenState();
-}
-
-class _LoginScreenState extends State<LoginScreen> {
-  final _emailController = TextEditingController();
-  final _passwordController = TextEditingController();
-  bool _isLoading = false;
-  void _login() async {
-    if (_emailController.text.isEmpty || _passwordController.text.isEmpty) return;
-    setState(() => _isLoading = true);
-    String? result = await AuthService().signIn(email: _emailController.text.trim(), password: _passwordController.text.trim());
-    if (!mounted) return;
-    setState(() => _isLoading = false);
-    if (result != null) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text(result == "DEVICE_MISMATCH" ? "Locked to another device!" : result),
-          backgroundColor: Colors.redAccent,
-        ),
-      );
-    }
-  }
-  @override
-  Widget build(BuildContext context) {
-    return Scaffold(backgroundColor: Colors.black, body: Center(child: SingleChildScrollView(padding: const EdgeInsets.all(32.0), child: Column(mainAxisAlignment: MainAxisAlignment.center, children: [Container(padding: const EdgeInsets.all(24), decoration: BoxDecoration(color: Colors.amber.withValues(alpha: 0.05), shape: BoxShape.circle, border: Border.all(color: Colors.amber.withValues(alpha: 0.1), width: 2)), child: const Icon(Icons.bolt_rounded, size: 80, color: Colors.amber)), const SizedBox(height: 20), const Text("DARK HORIZON", style: TextStyle(color: Colors.amber, fontSize: 32, fontWeight: FontWeight.w900, letterSpacing: 4)), const SizedBox(height: 60), Container(decoration: BoxDecoration(color: Colors.grey[900], borderRadius: BorderRadius.circular(16), border: Border.all(color: Colors.white10)), child: TextField(controller: _emailController, style: const TextStyle(color: Colors.white), decoration: const InputDecoration(labelText: "Student Email", prefixIcon: Icon(Icons.alternate_email, color: Colors.amber), border: InputBorder.none, contentPadding: EdgeInsets.symmetric(horizontal: 20, vertical: 18)))), const SizedBox(height: 16), Container(decoration: BoxDecoration(color: Colors.grey[900], borderRadius: BorderRadius.circular(16), border: Border.all(color: Colors.white10)), child: TextField(controller: _passwordController, obscureText: true, style: const TextStyle(color: Colors.white), decoration: const InputDecoration(labelText: "Security Key", prefixIcon: Icon(Icons.vpn_key, color: Colors.amber), border: InputBorder.none, contentPadding: EdgeInsets.symmetric(horizontal: 20, vertical: 18)))), const SizedBox(height: 40), SizedBox(width: double.infinity, height: 60, child: ElevatedButton(onPressed: _isLoading ? null : _login, style: ElevatedButton.styleFrom(backgroundColor: Colors.amber, foregroundColor: Colors.black, shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16))), child: _isLoading ? const CircularProgressIndicator(color: Colors.black) : const Text("INITIALIZE SYSTEM", style: TextStyle(fontSize: 16, fontWeight: FontWeight.w900))))]))));
-  }
-}
-
 class DownloadsScreen extends StatefulWidget {
   const DownloadsScreen({super.key});
   @override
@@ -1134,7 +1177,6 @@ class _DownloadsScreenState extends State<DownloadsScreen> {
   }
   @override
   void dispose() {
-    WidgetsBinding.instance.removeObserver(this as WidgetsBindingObserver);
     _refreshTimer?.cancel();
     IsolateNameServer.removePortNameMapping('downloader_send_port');
     super.dispose();
@@ -1302,5 +1344,36 @@ class _DownloadsScreenState extends State<DownloadsScreen> {
         }
       ),
     );
+  }
+}
+
+class LoginScreen extends StatefulWidget {
+  const LoginScreen({super.key});
+  @override
+  State<LoginScreen> createState() => _LoginScreenState();
+}
+
+class _LoginScreenState extends State<LoginScreen> {
+  final _emailController = TextEditingController();
+  final _passwordController = TextEditingController();
+  bool _isLoading = false;
+  void _login() async {
+    if (_emailController.text.isEmpty || _passwordController.text.isEmpty) return;
+    setState(() => _isLoading = true);
+    String? result = await AuthService().signIn(email: _emailController.text.trim(), password: _passwordController.text.trim());
+    if (!mounted) return;
+    setState(() => _isLoading = false);
+    if (result != null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(result == "DEVICE_MISMATCH" ? "Locked to another device!" : result),
+          backgroundColor: Colors.redAccent,
+        ),
+      );
+    }
+  }
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(backgroundColor: Colors.black, body: Center(child: SingleChildScrollView(padding: const EdgeInsets.all(32.0), child: Column(mainAxisAlignment: MainAxisAlignment.center, children: [Container(padding: const EdgeInsets.all(24), decoration: BoxDecoration(color: Colors.amber.withValues(alpha: 0.05), shape: BoxShape.circle, border: Border.all(color: Colors.amber.withValues(alpha: 0.1), width: 2)), child: const Icon(Icons.bolt_rounded, size: 80, color: Colors.amber)), const SizedBox(height: 20), const Text("DARK HORIZON", style: TextStyle(color: Colors.amber, fontSize: 32, fontWeight: FontWeight.w900, letterSpacing: 4)), const SizedBox(height: 60), Container(decoration: BoxDecoration(color: Colors.grey[900], borderRadius: BorderRadius.circular(16), border: Border.all(color: Colors.white10)), child: TextField(controller: _emailController, style: const TextStyle(color: Colors.white), decoration: const InputDecoration(labelText: "Student Email", prefixIcon: Icon(Icons.alternate_email, color: Colors.amber), border: InputBorder.none, contentPadding: EdgeInsets.symmetric(horizontal: 20, vertical: 18)))), const SizedBox(height: 16), Container(decoration: BoxDecoration(color: Colors.grey[900], borderRadius: BorderRadius.circular(16), border: Border.all(color: Colors.white10)), child: TextField(controller: _passwordController, obscureText: true, style: const TextStyle(color: Colors.white), decoration: const InputDecoration(labelText: "Security Key", prefixIcon: Icon(Icons.vpn_key, color: Colors.amber), border: InputBorder.none, contentPadding: EdgeInsets.symmetric(horizontal: 20, vertical: 18)))), const SizedBox(height: 40), SizedBox(width: double.infinity, height: 60, child: ElevatedButton(onPressed: _isLoading ? null : _login, style: ElevatedButton.styleFrom(backgroundColor: Colors.amber, foregroundColor: Colors.black, shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16))), child: _isLoading ? const CircularProgressIndicator(color: Colors.black) : const Text("INITIALIZE SYSTEM", style: TextStyle(fontSize: 16, fontWeight: FontWeight.w900))))]))));
   }
 }

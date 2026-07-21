@@ -2,18 +2,18 @@ plugins {
     id("com.android.application")
     id("kotlin-android")
     id("com.google.gms.google-services")
-    // The Flutter Gradle Plugin must be applied after the Android and Kotlin Gradle plugins.
     id("dev.flutter.flutter-gradle-plugin")
 }
 
 android {
     namespace = "com.shadow.dark_horizon"
-    compileSdk = flutter.compileSdkVersion
+    compileSdk = 36
     ndkVersion = flutter.ndkVersion
 
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
+        isCoreLibraryDesugaringEnabled = true
     }
 
     kotlinOptions {
@@ -22,24 +22,18 @@ android {
 
     defaultConfig {
         applicationId = "com.shadow.dark_horizon"
-
-        // Use direct version instead of flutter.minSdkVersion to avoid "min is 1" error
         minSdk = flutter.minSdkVersion
+        targetSdk = 35
         multiDexEnabled = true
-        targetSdk = 34
-
-        // Version code and name are correct
         versionCode = 1
         versionName = "1.0.0"
     }
+
     buildTypes {
         release {
-            // Reverting to previous stable state as requested
             isMinifyEnabled = false
             isShrinkResources = false
-
-            // TODO: Add your own signing config for the release build.
-            // Signing with the debug keys for now, so `flutter run --release` works.
+            proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
             signingConfig = signingConfigs.getByName("debug")
         }
     }
@@ -48,10 +42,10 @@ android {
 flutter {
     source = "../.."
 }
+
 dependencies {
-    // These are standard Android design components
     implementation("androidx.appcompat:appcompat:1.6.1")
     implementation("com.google.android.material:material:1.9.0")
-
-    // Add any future android-specific libraries here
+    implementation("androidx.multidex:multidex:2.0.1")
+    coreLibraryDesugaring("com.android.tools:desugar_jdk_libs:2.0.4")
 }

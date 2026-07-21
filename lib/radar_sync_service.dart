@@ -21,16 +21,20 @@ class AppRadarSyncService with WidgetsBindingObserver {
   Timer? _engagementTimer;
   String? _currentLocation;
   bool _isWatching = false;
+  bool _isInitialized = false;
 
   /// 1. INITIALIZE (Call in main.dart)
   void init() {
+    if (_isInitialized) return;
+    _isInitialized = true;
+    
     WidgetsBinding.instance.addObserver(this);
     
     // Listen for Auth changes to sync data immediately on login
     _auth.authStateChanges().listen((User? user) {
       if (user != null) {
         syncUserStatus();
-        _syncOfflineMinutes(); // Sync any pending offline minutes
+        _syncOfflineMinutes(); 
       }
     });
   }
@@ -43,10 +47,10 @@ class AppRadarSyncService with WidgetsBindingObserver {
 
   /// 1.2 SYNC OFFLINE MINUTES TO FIRESTORE
   Future<void> _syncOfflineMinutes() async {
-    final user = _auth.currentUser;
-    if (user == null) return;
-
     try {
+      final user = _auth.currentUser;
+      if (user == null) return;
+
       final file = await _getOfflineCacheFile();
       if (await file.exists()) {
         final content = await file.readAsString();
@@ -69,60 +73,54 @@ class AppRadarSyncService with WidgetsBindingObserver {
 
   /// 2. USER STATUS & LOCATION SYNC (HTTPS Fail-safe Architecture)
   Future<void> syncUserStatus() async {
-    final user = _auth.currentUser;
-    if (user == null) return;
-
-    String location = _currentLocation ?? "Scanning...";
     try {
-      // Primary Provider: ipcdn.io (Secure HTTPS)
-      final response = await http.get(Uri.parse('https://ipcdn.io/json')).timeout(const Duration(seconds: 5));
-      if (response.statusCode == 200) {
-        final data = json.decode(response.body);
-        location = "${data['city'] ?? "Unknown City"}, ${data['region'] ?? "Unknown Region"}";
-        _currentLocation = location;
-      } else {
-        throw Exception("Primary provider failed");
-      }
-    } catch (_) {
+      final user = _auth.currentUser;
+      if (user == null) return;
+
+      String location = _currentLocation ?? "Network Active";
       try {
-        // Fallback Provider: api.ipify.org (Ensures location isn't stuck on 'Scanning...')
-        final response = await http.get(Uri.parse('https://api.ipify.org?format=json')).timeout(const Duration(seconds: 5));
+        // Primary Provider: ipwho.is (Stable HTTPS)
+        final response = await http.get(Uri.parse('https://ipwho.is/')).timeout(const Duration(seconds: 8));
         if (response.statusCode == 200) {
           final data = json.decode(response.body);
-          location = "IP: ${data['ip'] ?? "Unknown"}";
-          _currentLocation = location;
+          if (data['success'] == true) {
+            location = "${data['city'] ?? "Unknown"}, ${data['region'] ?? ""}";
+            _currentLocation = location;
+          }
         }
       } catch (_) {
-        debugPrint("Location Sync Failed: All providers unreachable");
         location = _currentLocation ?? "Network Active";
       }
-    }
 
-    // Fetch actual device brand and model
-    String deviceDisplayName = Platform.isAndroid ? "Android Device" : "iOS Device";
-    try {
-      final deviceInfo = DeviceInfoPlugin();
-      if (Platform.isAndroid) {
-        final androidInfo = await deviceInfo.androidInfo;
-        deviceDisplayName = "${androidInfo.brand} ${androidInfo.model}";
-      } else if (Platform.isIOS) {
-        final iosInfo = await deviceInfo.iosInfo;
-        deviceDisplayName = iosInfo.name;
+      // Fetch actual device brand and model
+      String deviceDisplayName = Platform.isAndroid ? "Android Device" : "iOS Device";
+      try {
+        final deviceInfo = DeviceInfoPlugin();
+        if (Platform.isAndroid) {
+          final androidInfo = await deviceInfo.androidInfo;
+          deviceDisplayName = "${androidInfo.brand} ${androidInfo.model}";
+        } else if (Platform.isIOS) {
+          final iosInfo = await deviceInfo.iosInfo;
+          deviceDisplayName = iosInfo.name;
+        }
+      } catch (e) {
+        debugPrint("Error fetching device info: $e");
       }
-    } catch (e) {
-      debugPrint("Error fetching device info: $e");
-    }
 
-    await _db.collection('users').doc(user.uid).set({
-      'uid': user.uid,
-      'email': user.email,
-      'isOnline': true,
-      'lastActive': FieldValue.serverTimestamp(),
-      'device': deviceDisplayName,
-      'location': location,
-      'locationInfo': location, // Compatibility with Admin Panel
-      'deviceType': Platform.isAndroid ? "Mobile" : "Tablet",
-    }, SetOptions(merge: true));
+      await _db.collection('users').doc(user.uid).set({
+        'uid': user.uid,
+        'email': user.email,
+        'isOnline': true,
+        'lastActive': FieldValue.serverTimestamp(),
+        'device': deviceDisplayName,
+        'location': location,
+        'locationInfo': location, // Compatibility with Admin Panel
+        'deviceType': Platform.isAndroid ? "Mobile" : "Tablet",
+        'role': 'student',
+      }, SetOptions(merge: true)).timeout(const Duration(seconds: 5));
+    } catch (e) {
+      debugPrint("Radar Status Sync Firestore Error: $e");
+    }
   }
 
   /// 3. VIDEO WATCHING TRACKER (Include Subject Name)
@@ -132,64 +130,59 @@ class AppRadarSyncService with WidgetsBindingObserver {
     String? unitName,
     String? subjectName,
   }) async {
-    final user = _auth.currentUser;
-    if (user == null) return;
+    try {
+      final user = _auth.currentUser;
+      if (user == null) return;
 
-    _isWatching = isWatching;
+      _isWatching = isWatching;
 
-    await _db.collection('users').doc(user.uid).update({
-      'isWatching': isWatching,
-      'currentPlayingLecture': isWatching ? lectureTitle : null,
-      'currentUnit': isWatching ? unitName : null,
-      'currentSubject': isWatching ? subjectName : null, // New field for Live Tracking
-    });
+      await _db.collection('users').doc(user.uid).update({
+        'isWatching': isWatching,
+        'currentPlayingLecture': isWatching ? lectureTitle : FieldValue.delete(),
+        'currentUnit': isWatching ? unitName : FieldValue.delete(),
+        'currentSubject': isWatching ? subjectName : FieldValue.delete(),
+      }).timeout(const Duration(seconds: 5));
 
-    // LEADERBOARD LOGIC: Every 60s increment minutes watched
-    if (isWatching) {
       _engagementTimer?.cancel();
-      _engagementTimer = Timer.periodic(const Duration(seconds: 60), (timer) async {
-        if (_isWatching && _auth.currentUser != null) {
-          try {
-            // Attempt online sync
-            await _db.collection('users').doc(_auth.currentUser!.uid).update({
-              'totalMinutesWatched': FieldValue.increment(1),
-              'lastActive': FieldValue.serverTimestamp(),
-            }).timeout(const Duration(seconds: 5));
-          } catch (e) {
-            // OFFLINE LOGIC: Save to local cache if Firestore update fails
+      _engagementTimer = null;
+
+      if (isWatching) {
+        _engagementTimer = Timer.periodic(const Duration(seconds: 60), (timer) async {
+          if (_isWatching && _auth.currentUser != null) {
             try {
-              final file = await _getOfflineCacheFile();
-              int currentPending = 0;
-              if (await file.exists()) {
-                final content = await file.readAsString();
-                currentPending = json.decode(content)['minutes'] ?? 0;
-              }
-              await file.writeAsString(json.encode({'minutes': currentPending + 1}));
-              debugPrint("Radar: Saved 1 minute to offline cache");
-            } catch (cacheError) {
-              debugPrint("Radar Cache Error: $cacheError");
+              await _db.collection('users').doc(_auth.currentUser!.uid).update({
+                'totalMinutesWatched': FieldValue.increment(1),
+                'lastActive': FieldValue.serverTimestamp(),
+              }).timeout(const Duration(seconds: 5));
+            } catch (e) {
+              try {
+                final file = await _getOfflineCacheFile();
+                int currentPending = 0;
+                if (await file.exists()) {
+                  final content = await file.readAsString();
+                  currentPending = json.decode(content)['minutes'] ?? 0;
+                }
+                await file.writeAsString(json.encode({'minutes': currentPending + 1}));
+              } catch (_) {}
             }
+          } else {
+            timer.cancel();
           }
-        } else {
-          timer.cancel();
-        }
-      });
-    } else {
-      _engagementTimer?.cancel();
-      _syncOfflineMinutes(); // Attempt sync when video stops
+        });
+      } else {
+        _syncOfflineMinutes();
+      }
+    } catch (e) {
+      debugPrint("Radar Watching Status Error: $e");
     }
   }
 
-  /// 4. AUTOMATIC LIFECYCLE TRACKING
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
     if (state == AppLifecycleState.resumed) {
       syncUserStatus();
     } else if (state == AppLifecycleState.paused || state == AppLifecycleState.inactive || state == AppLifecycleState.detached) {
-      // Mark offline immediately when leaving or closing the app
       setOffline();
-      
-      // Stop watch session tracking if app is closed/hidden
       if (_isWatching) {
         updateWatchingStatus(isWatching: false);
       }
@@ -197,8 +190,12 @@ class AppRadarSyncService with WidgetsBindingObserver {
   }
 
   Future<void> setOffline() async {
-    final user = _auth.currentUser;
-    if (user == null) return;
-    await _db.collection('users').doc(user.uid).update({'isOnline': false});
+    try {
+      final user = _auth.currentUser;
+      if (user == null) return;
+      await _db.collection('users').doc(user.uid).update({'isOnline': false}).timeout(const Duration(seconds: 5));
+    } catch (e) {
+      debugPrint("Radar Set Offline Error: $e");
+    }
   }
 }

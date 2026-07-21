@@ -3,6 +3,7 @@ import 'package:firebase_auth/firebase_auth.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:device_info_plus/device_info_plus.dart';
 import 'dart:io';
+import 'package:flutter/foundation.dart';
 
 class AuthService {
   final FirebaseAuth _auth = FirebaseAuth.instance;
@@ -21,16 +22,21 @@ class AuthService {
 
   // --- 2. ADMIN ROLE CHECK ---
   Future<bool> isAdmin() async {
-    User? user = _auth.currentUser;
-    if (user == null) return false;
-    DocumentSnapshot doc = await _firestore.collection('users').doc(user.uid).get();
-    if (doc.exists) {
-      return (doc.data() as Map<String, dynamic>)['role'] == 'admin';
+    try {
+      User? user = _auth.currentUser;
+      if (user == null) return false;
+      DocumentSnapshot doc = await _firestore.collection('users').doc(user.uid).get();
+      if (doc.exists) {
+        final data = doc.data() as Map<String, dynamic>?;
+        return data?['role'] == 'admin';
+      }
+    } catch (e) {
+      debugPrint("AuthService isAdmin Error: $e");
     }
     return false;
   }
 
-  // Get Unique Device ID
+  // Get Unique Device ID (STRICT ANDROID ID LOCK)
   Future<String?> _getDeviceId() async {
     try {
       if (Platform.isAndroid) {
@@ -41,16 +47,18 @@ class AuthService {
         return iosInfo.identifierForVendor;
       }
     } catch (e) {
-      return null;
+      debugPrint("AuthService _getDeviceId Error: $e");
     }
     return null;
   }
 
-  // --- 3. SECURE SIGN IN WITH DEVICE LOCK ---
+  // --- 3. SECURE SIGN IN WITH SINGLE-DEVICE LOCK ---
   Future<String?> signIn({required String email, required String password}) async {
     try {
       String? currentDeviceId = await _getDeviceId();
-      if (currentDeviceId == null) return "Could not identify device.";
+      if (currentDeviceId == null || currentDeviceId.isEmpty) {
+        return "CRITICAL: Could not identify device hardware.";
+      }
 
       UserCredential result = await _auth.signInWithEmailAndPassword(email: email, password: password);
       User? user = result.user;
@@ -63,41 +71,59 @@ class AuthService {
           await userDoc.set({
             'email': email,
             'deviceId': currentDeviceId,
-            'role': 'student', // Default role
+            'role': 'student',
             'lockedAt': FieldValue.serverTimestamp(),
           }, SetOptions(merge: true));
           return null;
         }
 
-        Map<String, dynamic> userData = doc.data() as Map<String, dynamic>;
-        String? registeredDeviceId = userData['deviceId'];
+        final userData = doc.data() as Map<String, dynamic>?;
+        String? registeredDeviceId = userData?['deviceId']?.toString();
 
-        if (registeredDeviceId == null || registeredDeviceId.isEmpty) {
-          await userDoc.update({'deviceId': currentDeviceId, 'lockedAt': FieldValue.serverTimestamp()});
+        if (registeredDeviceId == null || registeredDeviceId.trim().isEmpty) {
+          await userDoc.update({
+            'deviceId': currentDeviceId,
+            'lockedAt': FieldValue.serverTimestamp()
+          });
           return null;
-        } else if (registeredDeviceId != currentDeviceId) {
+        } 
+        
+        if (registeredDeviceId != currentDeviceId) {
           await _auth.signOut();
           return "DEVICE_MISMATCH";
         }
       }
       return null;
     } on FirebaseAuthException catch (e) {
-      return e.message;
+      return e.message ?? "Authentication failed.";
     } catch (e) {
-      return "An unexpected error occurred.";
+      debugPrint("AuthService signIn Error: $e");
+      return "System Error: Please try again later.";
     }
   }
 
+  // --- 4. HARDWARE AUTHORIZATION CHECK ---
   Future<bool> isDeviceAuthorized() async {
-    User? user = _auth.currentUser;
-    if (user == null) return false;
-    String? currentId = await _getDeviceId();
-    DocumentSnapshot doc = await _firestore.collection('users').doc(user.uid).get();
-    if (doc.exists) {
-      String? registeredId = (doc.data() as Map<String, dynamic>)['deviceId'];
-      return registeredId == null || registeredId.isEmpty || registeredId == currentId;
+    try {
+      User? user = _auth.currentUser;
+      if (user == null) return false;
+
+      String? currentId = await _getDeviceId();
+      if (currentId == null) return false;
+
+      DocumentSnapshot doc = await _firestore.collection('users').doc(user.uid).get();
+      if (!doc.exists) return true;
+
+      final data = doc.data() as Map<String, dynamic>?;
+      String? registeredId = data?['deviceId']?.toString();
+
+      if (registeredId == null || registeredId.isEmpty) return true;
+
+      return registeredId == currentId;
+    } catch (e) {
+      debugPrint("AuthService isDeviceAuthorized Error: $e");
+      return true; // Fail safe
     }
-    return true;
   }
 
   Future<String?> signUp({required String email, required String password, required String name}) async {
@@ -106,17 +132,24 @@ class AuthService {
       await _firestore.collection('users').doc(result.user!.uid).set({
         'name': name,
         'email': email,
-        'role': 'student', // Explicitly set role
+        'role': 'student',
         'deviceId': '',
         'createdAt': FieldValue.serverTimestamp(),
       });
       return null; 
     } on FirebaseAuthException catch (e) {
-      return e.message;
+      return e.message ?? "Sign up failed.";
+    } catch (e) {
+      debugPrint("AuthService signUp Error: $e");
+      return "Registration error.";
     }
   }
 
   Future<void> signOut() async {
-    await _auth.signOut();
+    try {
+      await _auth.signOut();
+    } catch (e) {
+      debugPrint("AuthService signOut Error: $e");
+    }
   }
 }

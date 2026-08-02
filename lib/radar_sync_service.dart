@@ -25,7 +25,9 @@ class AppRadarSyncService with WidgetsBindingObserver {
 
   /// 1. INITIALIZE (Call in main.dart)
   void init() {
-    if (_isInitialized) return;
+    if (_isInitialized) {
+      return;
+    }
     _isInitialized = true;
     
     WidgetsBinding.instance.addObserver(this);
@@ -49,7 +51,9 @@ class AppRadarSyncService with WidgetsBindingObserver {
   Future<void> _syncOfflineMinutes() async {
     try {
       final user = _auth.currentUser;
-      if (user == null) return;
+      if (user == null) {
+        return;
+      }
 
       final file = await _getOfflineCacheFile();
       if (await file.exists()) {
@@ -75,7 +79,9 @@ class AppRadarSyncService with WidgetsBindingObserver {
   Future<void> syncUserStatus() async {
     try {
       final user = _auth.currentUser;
-      if (user == null) return;
+      if (user == null) {
+        return;
+      }
 
       String location = _currentLocation ?? "Network Active";
       try {
@@ -132,7 +138,9 @@ class AppRadarSyncService with WidgetsBindingObserver {
   }) async {
     try {
       final user = _auth.currentUser;
-      if (user == null) return;
+      if (user == null) {
+        return;
+      }
 
       _isWatching = isWatching;
 
@@ -192,7 +200,9 @@ class AppRadarSyncService with WidgetsBindingObserver {
   Future<void> setOffline() async {
     try {
       final user = _auth.currentUser;
-      if (user == null) return;
+      if (user == null) {
+        return;
+      }
       await _db.collection('users').doc(user.uid).update({'isOnline': false}).timeout(const Duration(seconds: 5));
     } catch (e) {
       debugPrint("Radar Set Offline Error: $e");

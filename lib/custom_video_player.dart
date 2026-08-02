@@ -119,12 +119,19 @@ class _MXStylePlayerState extends State<MXStylePlayer> with WidgetsBindingObserv
   void _startControlsTimer() {
     _controlsTimer?.cancel();
     _controlsTimer = Timer(const Duration(seconds: 5), () {
-      if (mounted && _controller!.value.isPlaying) setState(() => _showControls = false);
+      if (mounted && _controller!.value.isPlaying) {
+        setState(() => _showControls = false);
+      }
     });
   }
 
   void _toggleControls() {
-    setState(() { _showControls = !_showControls; if (_showControls) _startControlsTimer(); });
+    setState(() {
+      _showControls = !_showControls;
+      if (_showControls) {
+        _startControlsTimer();
+      }
+    });
   }
 
   String _formatDuration(Duration d) {
@@ -136,7 +143,9 @@ class _MXStylePlayerState extends State<MXStylePlayer> with WidgetsBindingObserv
   Widget build(BuildContext context) {
     return PopScope(
       onPopInvokedWithResult: (didPop, result) async {
-        if (didPop) _resetOrientation();
+        if (didPop) {
+          _resetOrientation();
+        }
       },
       child: Scaffold(
         backgroundColor: Colors.black,
@@ -158,7 +167,9 @@ class _MXStylePlayerState extends State<MXStylePlayer> with WidgetsBindingObserv
   }
 
   Widget _buildVideoSurface() {
-    if (!_isInitialized) return const Center(child: CircularProgressIndicator(color: neonCyan));
+    if (!_isInitialized) {
+      return const Center(child: CircularProgressIndicator(color: neonCyan));
+    }
     return Center(
       child: FittedBox(
         fit: _videoFit, 
@@ -174,74 +185,198 @@ class _MXStylePlayerState extends State<MXStylePlayer> with WidgetsBindingObserv
   Widget _buildVideoControls() {
     return Stack(
       children: [
-        Container(decoration: BoxDecoration(gradient: LinearGradient(begin: Alignment.topCenter, end: Alignment.bottomCenter, colors: [Colors.black.withValues(alpha: 0.7), Colors.transparent, Colors.black.withValues(alpha: 0.7)]))),
+        // Dark Gradient Overlay
+        Container(
+          decoration: BoxDecoration(
+            gradient: LinearGradient(
+              begin: Alignment.topCenter,
+              end: Alignment.bottomCenter,
+              colors: [
+                Colors.black.withValues(alpha: 0.8),
+                Colors.transparent,
+                Colors.transparent,
+                Colors.black.withValues(alpha: 0.8),
+              ],
+            ),
+          ),
+        ),
+
+        // 1. TOP BAR: Close & Title Info
         Positioned(
-          top: 20, left: 20, right: 20,
+          top: MediaQuery.of(context).padding.top + 10,
+          left: 20, right: 20,
           child: Row(
-            mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
-              Row(children: [
-                IconButton(icon: const Icon(Icons.close, color: Colors.white, size: 28), onPressed: () => Navigator.pop(context)),
-                const SizedBox(width: 15), 
-                GestureDetector(
-                  onTap: () async {
-                    if (MediaQuery.of(context).orientation == Orientation.portrait) {
-                      await SystemChrome.setPreferredOrientations([DeviceOrientation.landscapeLeft, DeviceOrientation.landscapeRight]);
-                      await SystemChrome.setEnabledSystemUIMode(SystemUiMode.immersiveSticky);
-                    } else {
-                      await SystemChrome.setPreferredOrientations([DeviceOrientation.portraitUp]);
-                      await SystemChrome.setEnabledSystemUIMode(SystemUiMode.edgeToEdge);
-                    }
-                    setState(() {});
-                  },
-                  child: Container(
-                    padding: const EdgeInsets.all(5), 
-                    decoration: BoxDecoration(border: Border.all(color: neonCyan, width: 1), borderRadius: BorderRadius.circular(8)), 
-                    child: const Icon(Icons.screen_rotation_rounded, color: neonCyan, size: 18)
-                  )
+              IconButton(
+                icon: const Icon(Icons.arrow_back_ios_new_rounded, color: Colors.white, size: 22),
+                onPressed: () => Navigator.pop(context),
+              ),
+              const SizedBox(width: 10),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Text(
+                      widget.subjectCode.toUpperCase(),
+                      style: const TextStyle(color: neonCyan, fontSize: 10, fontWeight: FontWeight.bold, letterSpacing: 1.5),
+                    ),
+                    Text(
+                      _currentTitle ?? widget.title,
+                      style: const TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.bold),
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                  ],
                 ),
-                const SizedBox(width: 15), 
-                GestureDetector(onTap: () => setState(() => _videoFit = _videoFit == BoxFit.contain ? BoxFit.cover : BoxFit.contain), child: Container(padding: const EdgeInsets.all(5), decoration: BoxDecoration(border: Border.all(color: neonCyan, width: 1), borderRadius: BorderRadius.circular(8)), child: const Icon(Icons.aspect_ratio_rounded, color: neonCyan, size: 18)))]),
-              Flexible(child: _buildCapsuleControl(Icons.volume_up, _volume, neonCyan, (v) { setState(() => _volume = v); FlutterVolumeController.setVolume(v); })),
+              ),
             ],
           ),
         ),
-        Center(child: Row(mainAxisAlignment: MainAxisAlignment.center, children: [
-          IconButton(icon: const Icon(Icons.replay_10, color: Colors.white, size: 30), onPressed: () => _controller?.seekTo(_controller!.value.position - const Duration(seconds: 10))),
-          const SizedBox(width: 60),
-          GestureDetector(
-            onTap: () {
-              if (_controller!.value.isPlaying) {
-                _controller!.pause();
-                AppRadarSyncService.instance.updateWatchingStatus(isWatching: false);
-              } else {
-                _controller!.play();
-                AppRadarSyncService.instance.updateWatchingStatus(isWatching: true, lectureTitle: _currentTitle ?? widget.title, unitName: widget.unitName, subjectName: widget.subjectCode);
-              }
-              setState(() {});
-            },
-            child: Container(padding: const EdgeInsets.all(18), decoration: BoxDecoration(shape: BoxShape.circle, border: Border.all(color: Colors.tealAccent, width: 3)), child: Icon(_controller!.value.isPlaying ? Icons.pause_rounded : Icons.play_arrow_rounded, color: Colors.white, size: 45)),
+
+        // 2. SIDE CONTROLS: Brightness (Left) & Volume (Right)
+        Center(
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 10),
+            child: Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                // Brightness Capsule
+                RotatedBox(
+                  quarterTurns: 3,
+                  child: _buildCapsuleControl(Icons.wb_sunny_rounded, _brightness, brightYellow, (v) {
+                    setState(() => _brightness = v);
+                    ScreenBrightness().setScreenBrightness(v);
+                  }),
+                ),
+                // Volume Capsule
+                RotatedBox(
+                  quarterTurns: 3,
+                  child: _buildCapsuleControl(Icons.volume_up_rounded, _volume, neonCyan, (v) {
+                    setState(() => _volume = v);
+                    FlutterVolumeController.setVolume(v);
+                  }),
+                ),
+              ],
+            ),
           ),
-          const SizedBox(width: 60),
-          IconButton(icon: const Icon(Icons.forward_10, color: Colors.white, size: 30), onPressed: () => _controller?.seekTo(_controller!.value.position + const Duration(seconds: 10))),
-        ])),
-        Positioned(
-          bottom: 20, left: 25, right: 25,
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
+        ),
+
+        // 3. CENTER PLAYBACK CONTROLS
+        Center(
+          child: Row(
+            mainAxisAlignment: MainAxisAlignment.center,
             children: [
-              Text("${widget.subjectCode} : ${widget.unitName}", style: const TextStyle(color: Colors.white70, fontSize: 11)),
-              Text(_currentTitle ?? widget.title, style: const TextStyle(color: Colors.white, fontSize: 24, fontWeight: FontWeight.w900, letterSpacing: 1)),
-              const SizedBox(height: 15),
-              Row(children: [Text(_formatDuration(_controller?.value.position ?? Duration.zero), style: const TextStyle(color: neonCyan, fontSize: 12, fontWeight: FontWeight.bold)), Expanded(child: SliderTheme(data: SliderTheme.of(context).copyWith(trackHeight: 1.5, activeTrackColor: Colors.white24, inactiveTrackColor: Colors.white12, thumbColor: brightYellow, overlayColor: Colors.transparent, thumbShape: const RoundSliderThumbShape(enabledThumbRadius: 5, elevation: 0)), child: Slider(value: _controller?.value.position.inSeconds.toDouble() ?? 0, max: _controller?.value.duration.inSeconds.toDouble() ?? 1, onChanged: (v) => _controller?.seekTo(Duration(seconds: v.toInt()))))), Text(_formatDuration(_controller?.value.duration ?? Duration.zero), style: const TextStyle(color: Colors.white38, fontSize: 12))]),
+              IconButton(
+                icon: const Icon(Icons.replay_10_rounded, color: Colors.white, size: 35),
+                onPressed: () => _controller?.seekTo(_controller!.value.position - const Duration(seconds: 10)),
+              ),
+              const SizedBox(width: 40),
+              GestureDetector(
+                onTap: () {
+                  if (_controller!.value.isPlaying) {
+                    _controller!.pause();
+                    AppRadarSyncService.instance.updateWatchingStatus(isWatching: false);
+                  } else {
+                    _controller!.play();
+                    AppRadarSyncService.instance.updateWatchingStatus(
+                      isWatching: true, 
+                      lectureTitle: _currentTitle ?? widget.title, 
+                      unitName: widget.unitName, 
+                      subjectName: widget.subjectCode
+                    );
+                  }
+                  setState(() {});
+                },
+                child: Container(
+                  padding: const EdgeInsets.all(15),
+                  decoration: BoxDecoration(
+                    color: Colors.white.withValues(alpha: 0.1),
+                    shape: BoxShape.circle,
+                    border: Border.all(color: neonCyan.withValues(alpha: 0.5), width: 2),
+                  ),
+                  child: Icon(
+                    _controller!.value.isPlaying ? Icons.pause_rounded : Icons.play_arrow_rounded,
+                    color: Colors.white,
+                    size: 50,
+                  ),
+                ),
+              ),
+              const SizedBox(width: 40),
+              IconButton(
+                icon: const Icon(Icons.forward_10_rounded, color: Colors.white, size: 35),
+                onPressed: () => _controller?.seekTo(_controller!.value.position + const Duration(seconds: 10)),
+              ),
+            ],
+          ),
+        ),
+
+        // 4. BOTTOM SECTION: Seekbar & Utility Buttons
+        Positioned(
+          bottom: 20, left: 20, right: 20,
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              // Seek Bar
+              Row(
+                children: [
+                  Text(_formatDuration(_controller?.value.position ?? Duration.zero), 
+                    style: const TextStyle(color: neonCyan, fontSize: 11, fontWeight: FontWeight.bold)),
+                  Expanded(
+                    child: SliderTheme(
+                      data: SliderTheme.of(context).copyWith(
+                        trackHeight: 2,
+                        activeTrackColor: neonCyan,
+                        inactiveTrackColor: Colors.white24,
+                        thumbColor: Colors.white,
+                        overlayColor: neonCyan.withValues(alpha: 0.2),
+                        thumbShape: const RoundSliderThumbShape(enabledThumbRadius: 6),
+                      ),
+                      child: Slider(
+                        value: _controller?.value.position.inSeconds.toDouble() ?? 0,
+                        max: _controller?.value.duration.inSeconds.toDouble() ?? 1,
+                        onChanged: (v) => _controller?.seekTo(Duration(seconds: v.toInt())),
+                      ),
+                    ),
+                  ),
+                  Text(_formatDuration(_controller?.value.duration ?? Duration.zero), 
+                    style: const TextStyle(color: Colors.white60, fontSize: 11)),
+                ],
+              ),
               const SizedBox(height: 10),
-              Row(mainAxisAlignment: MainAxisAlignment.end, children: [
-                Row(mainAxisSize: MainAxisSize.min, children: [
-                  _buildCapsuleControl(Icons.wb_sunny_rounded, _brightness, brightYellow, (v) { setState(() => _brightness = v); ScreenBrightness().setScreenBrightness(v); }), 
-                  const SizedBox(width: 20), 
-                  IconButton(icon: const Icon(Icons.settings, color: Colors.white, size: 26), onPressed: _showSpeedMenu)
-                ])
-              ]),
+              // Utility Row
+              Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                children: [
+                  // Unit Name Label
+                  Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                    decoration: BoxDecoration(color: Colors.white10, borderRadius: BorderRadius.circular(8)),
+                    child: Text(widget.unitName, style: const TextStyle(color: Colors.white70, fontSize: 11, fontWeight: FontWeight.bold)),
+                  ),
+                  // Action Buttons
+                  Row(
+                    children: [
+                      _buildSmallIconButton(Icons.settings_outlined, _showSpeedMenu),
+                      const SizedBox(width: 15),
+                      _buildSmallIconButton(Icons.aspect_ratio_rounded, () {
+                        setState(() => _videoFit = _videoFit == BoxFit.contain ? BoxFit.cover : BoxFit.contain);
+                      }),
+                      const SizedBox(width: 15),
+                      _buildSmallIconButton(Icons.screen_rotation_rounded, () async {
+                        if (MediaQuery.of(context).orientation == Orientation.portrait) {
+                          await SystemChrome.setPreferredOrientations([DeviceOrientation.landscapeLeft, DeviceOrientation.landscapeRight]);
+                          await SystemChrome.setEnabledSystemUIMode(SystemUiMode.immersiveSticky);
+                        } else {
+                          await SystemChrome.setPreferredOrientations([DeviceOrientation.portraitUp]);
+                          await SystemChrome.setEnabledSystemUIMode(SystemUiMode.edgeToEdge);
+                        }
+                        setState(() {});
+                      }),
+                    ],
+                  ),
+                ],
+              ),
             ],
           ),
         ),
@@ -249,8 +384,50 @@ class _MXStylePlayerState extends State<MXStylePlayer> with WidgetsBindingObserv
     );
   }
 
+  Widget _buildSmallIconButton(IconData icon, VoidCallback onTap) {
+    return GestureDetector(
+      onTap: onTap,
+      child: Container(
+        padding: const EdgeInsets.all(8),
+        decoration: BoxDecoration(
+          border: Border.all(color: Colors.white24),
+          borderRadius: BorderRadius.circular(10),
+        ),
+        child: Icon(icon, color: Colors.white, size: 20),
+      ),
+    );
+  }
+
   Widget _buildCapsuleControl(IconData icon, double value, Color color, ValueChanged<double> onChanged) {
-    return Container(padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 2), decoration: BoxDecoration(color: Colors.black45, borderRadius: BorderRadius.circular(20)), child: Row(mainAxisSize: MainAxisSize.min, children: [Icon(icon, color: color, size: 16), SizedBox(width: 80, child: SliderTheme(data: SliderTheme.of(context).copyWith(trackHeight: 1.5, thumbShape: const RoundSliderThumbShape(enabledThumbRadius: 4), overlayShape: const RoundSliderOverlayShape(overlayRadius: 0)), child: Slider(value: value, activeColor: color, inactiveColor: Colors.white12, onChanged: onChanged)))]));
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+      decoration: BoxDecoration(
+        color: Colors.black54,
+        borderRadius: BorderRadius.circular(25),
+        border: Border.all(color: color.withValues(alpha: 0.3), width: 1),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(icon, color: color, size: 18),
+          const SizedBox(width: 8),
+          SizedBox(
+            width: 100,
+            child: SliderTheme(
+              data: SliderTheme.of(context).copyWith(
+                trackHeight: 2,
+                thumbShape: const RoundSliderThumbShape(enabledThumbRadius: 5),
+                overlayShape: const RoundSliderOverlayShape(overlayRadius: 0),
+                activeTrackColor: color,
+                inactiveTrackColor: Colors.white12,
+                thumbColor: Colors.white,
+              ),
+              child: Slider(value: value, onChanged: onChanged),
+            ),
+          ),
+        ],
+      ),
+    );
   }
 
   void _showSpeedMenu() {

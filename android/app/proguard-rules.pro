@@ -13,3 +13,6 @@
 # AndroidX / Media3 / Desugaring rules
 -keep class androidx.** { *; }
 -dontwarn androidx.**
+
+# Google Play Core rules (fixes R8 missing class errors)
+-dontwarn com.google.android.play.core.**

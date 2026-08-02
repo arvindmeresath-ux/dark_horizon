@@ -68,12 +68,16 @@ class _AppPdfViewerState extends State<AppPdfViewer> {
   // --- 3-DOT MENU ACTIONS ---
 
   void _shareFile() async {
-    if (_localPath == null) return;
+    if (_localPath == null) {
+      return;
+    }
     await Share.shareXFiles([XFile(_localPath!)], text: widget.noteTitle);
   }
 
   void _saveToDevice() async {
-    if (_localPath == null) return;
+    if (_localPath == null) {
+      return;
+    }
     try {
       Directory? downloadsDir;
       if (Platform.isAndroid) {
@@ -106,7 +110,9 @@ class _AppPdfViewerState extends State<AppPdfViewer> {
   }
 
   void _openWithExternalApp() async {
-    if (_localPath == null) return;
+    if (_localPath == null) {
+      return;
+    }
     final result = await OpenFilex.open(_localPath!);
     if (result.type != ResultType.done && mounted) {
       ScaffoldMessenger.of(context).showSnackBar(
@@ -209,9 +215,15 @@ class _AppPdfViewerState extends State<AppPdfViewer> {
                       icon: const Icon(Icons.more_vert, color: Color(0xFFFFB300)),
                       color: const Color(0xFF1A1A1A),
                       onSelected: (value) {
-                        if (value == 'share') _shareFile();
-                        if (value == 'save') _saveToDevice();
-                        if (value == 'open') _openWithExternalApp();
+                        if (value == 'share') {
+                          _shareFile();
+                        }
+                        if (value == 'save') {
+                          _saveToDevice();
+                        }
+                        if (value == 'open') {
+                          _openWithExternalApp();
+                        }
                       },
                       itemBuilder: (context) => [
                         const PopupMenuItem(value: 'share', child: Row(children: [Icon(Icons.share, color: Colors.white, size: 18), SizedBox(width: 12), Text("Share", style: TextStyle(color: Colors.white, fontSize: 13))])),
@@ -232,7 +244,9 @@ class _AppPdfViewerState extends State<AppPdfViewer> {
               child: ValueListenableBuilder<int>(
                 valueListenable: _totalPagesNotifier,
                 builder: (context, totalPages, _) {
-                  if (totalPages == 0) return const SizedBox.shrink();
+                  if (totalPages == 0) {
+                    return const SizedBox.shrink();
+                  }
                   return ValueListenableBuilder<int>(
                     valueListenable: _currentPageNotifier,
                     builder: (context, currentPage, _) {

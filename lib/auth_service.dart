@@ -24,7 +24,9 @@ class AuthService {
   Future<bool> isAdmin() async {
     try {
       User? user = _auth.currentUser;
-      if (user == null) return false;
+      if (user == null) {
+        return false;
+      }
       DocumentSnapshot doc = await _firestore.collection('users').doc(user.uid).get();
       if (doc.exists) {
         final data = doc.data() as Map<String, dynamic>?;
@@ -106,13 +108,19 @@ class AuthService {
   Future<bool> isDeviceAuthorized() async {
     try {
       User? user = _auth.currentUser;
-      if (user == null) return false;
+      if (user == null) {
+        return false;
+      }
 
       String? currentId = await _getDeviceId();
-      if (currentId == null) return false;
+      if (currentId == null) {
+        return false;
+      }
 
       DocumentSnapshot doc = await _firestore.collection('users').doc(user.uid).get();
-      if (!doc.exists) return true;
+      if (!doc.exists) {
+        return true;
+      }
 
       final data = doc.data() as Map<String, dynamic>?;
       String? registeredId = data?['deviceId']?.toString();

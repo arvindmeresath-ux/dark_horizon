@@ -8,6 +8,7 @@ plugins {
 android {
     namespace = "com.shadow.dark_horizon"
     compileSdk = 36
+    buildToolsVersion = "36.0.0"
     ndkVersion = flutter.ndkVersion
 
     compileOptions {
